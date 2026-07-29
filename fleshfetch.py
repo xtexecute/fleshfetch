@@ -159,6 +159,7 @@ except Exception:
 
 APP_ID = "dev.xtexecute.fleshfetch"
 RPC_CLIENT_ID = "1499450242091716659"
+DEFAULT_GAME_TITLE = "Flesh Clicker"
 
 # ---------- PATHS ----------
 if getattr(sys, "frozen", False):
@@ -210,6 +211,7 @@ DEFAULT_SETTINGS = {
     "squish_ms": 100,
     "play_click_sound": False,
     "click_sound_volume": 15,
+    "game_title_mod_key": "",
 }
 
 DEFAULT_STATE = {
@@ -416,7 +418,7 @@ def fetch_leaderboard_entries():
 
 class FleshClicker(Gtk.Window):
     def __init__(self, app: Gtk.Application):
-        super().__init__(title="Flesh Clicker")
+        super().__init__(title=DEFAULT_GAME_TITLE)
         self.set_default_size(900, 600)
         self.set_application(app)
         self.app = app
@@ -478,6 +480,7 @@ class FleshClicker(Gtk.Window):
         self.loaded_mod_ids = set()
         self.installed_mods = []
         self._current_mod_info = None
+        self.current_game_title = DEFAULT_GAME_TITLE
 
         # mods can override this to change the click sound
         # default lookup lets users drop in their own wav, then falls back to bundled assets
@@ -500,6 +503,8 @@ class FleshClicker(Gtk.Window):
         self.start_time      = int(time.time())
         self.rpc_last_update = 0
         self.rpc             = None
+        self.rpc_update_timer_id = None
+        self.rpc_next_retry = 0.0
         self._last_sound_time = 0.0
 
         # ---------- CSS ----------
@@ -605,9 +610,9 @@ class FleshClicker(Gtk.Window):
 
         GLib.timeout_add(1000, self.on_timer_tick)
 
-        if RPC_AVAILABLE and self.settings.get("enable_rpc"):
+        if self.settings.get("enable_rpc"):
             self.init_rpc()
-            GLib.timeout_add(2000, self.tick_rpc_update)
+            self._ensure_rpc_update_timer()
 
     # ---------- CURRENCY HELPERS ----------
 
@@ -690,17 +695,54 @@ class FleshClicker(Gtk.Window):
 
     # ---------- DISCORD RPC ----------
 
+    def _ensure_rpc_update_timer(self):
+        if self.rpc_update_timer_id is None:
+            self.rpc_update_timer_id = GLib.timeout_add(2000, self.tick_rpc_update)
+
+    def _stop_rpc_update_timer(self):
+        if self.rpc_update_timer_id is None:
+            return
+        try:
+            GLib.source_remove(self.rpc_update_timer_id)
+        except Exception:
+            pass
+        self.rpc_update_timer_id = None
+
     def init_rpc(self):
+        if not RPC_AVAILABLE:
+            return False
         try:
             self.rpc = Presence(RPC_CLIENT_ID)
             self.rpc.connect()
+            self.rpc_last_update = 0
+            return True
         except Exception:
+            self.rpc = None
+            self.rpc_next_retry = time.time() + 30
+            return False
+
+    def shutdown_rpc(self):
+        self._stop_rpc_update_timer()
+        if not self.rpc:
+            return
+        try:
+            self.rpc.close()
+        except Exception:
+            pass
+        finally:
             self.rpc = None
 
     def tick_rpc_update(self):
-        if not self.rpc:
-            return True
+        if not self.settings.get("enable_rpc"):
+            self.rpc_update_timer_id = None
+            return False
+
         now = time.time()
+        if not self.rpc:
+            if RPC_AVAILABLE and now >= self.rpc_next_retry:
+                self.init_rpc()
+            return True
+
         if now - self.rpc_last_update < 10:
             return True
         self.rpc_last_update = now
@@ -709,11 +751,12 @@ class FleshClicker(Gtk.Window):
                 state="Playing Fleshfetch",
                 details="Clicking the flesh",
                 large_image="flesh",
-                large_text="Flesh Clicker",
+                large_text=self.current_game_title,
                 start=self.start_time,
             )
         except Exception:
-            pass
+            self.rpc = None
+            self.rpc_next_retry = now + 30
         return True
 
     # ---------- ACHIEVEMENT SOURCES ----------
@@ -777,12 +820,16 @@ class FleshClicker(Gtk.Window):
 
     def _get_mod_info(self, entry: str, mod_dir: str, manifest: dict) -> dict:
         mod_name = manifest.get("name") or manifest.get("title") or entry
+        game_title = manifest.get("game_title")
+        if not isinstance(game_title, str):
+            game_title = ""
         return {
             "id": entry,
             "name": str(mod_name),
             "version": str(manifest.get("version") or ""),
             "author": str(manifest.get("author") or ""),
             "description": str(manifest.get("description") or ""),
+            "game_title": game_title.strip(),
             "path": mod_dir,
         }
 
@@ -807,6 +854,29 @@ class FleshClicker(Gtk.Window):
         with open(mod_info["enabled_path"], "w", encoding="utf-8") as f:
             f.write("true\n" if enabled else "false\n")
         mod_info["enabled"] = enabled
+
+    def _apply_selected_game_title(self):
+        selected_mod_key = str(self.settings.get("game_title_mod_key") or "")
+        selected_mod = next(
+            (
+                mod_info
+                for mod_info in self.installed_mods
+                if mod_info.get("title_key") == selected_mod_key
+                and mod_info.get("enabled")
+                and mod_info.get("game_title")
+            ),
+            None,
+        )
+
+        if selected_mod is None:
+            self.current_game_title = DEFAULT_GAME_TITLE
+            if selected_mod_key:
+                self.settings["game_title_mod_key"] = ""
+                save_json(SETTINGS_FILE, self.settings)
+        else:
+            self.current_game_title = selected_mod["game_title"]
+
+        self.set_title(self.current_game_title)
 
     # ---------- MOD LOADING ----------
 
@@ -849,6 +919,8 @@ class FleshClicker(Gtk.Window):
                 mod_info["enabled"] = enabled
                 mod_info["enabled_path"] = enabled_path
                 mod_info["root"] = mods_root
+                mod_source = "system" if mods_root == SYSTEM_MODS_DIR else "user"
+                mod_info["title_key"] = f"{mod_source}:{entry}"
                 if not enabled:
                     self.installed_mods.append(mod_info)
                     continue
@@ -870,6 +942,7 @@ class FleshClicker(Gtk.Window):
                 finally:
                     self._current_mod_info = None
 
+        self._apply_selected_game_title()
         self.refresh_upgrades_ui()
         self.refresh_achievements_ui()
 
@@ -937,6 +1010,19 @@ class FleshClicker(Gtk.Window):
                     self._sound_cache[path] = pygame.mixer.Sound(path)
             except Exception:
                 pass
+
+    def set_game_title(self, title: str):
+        """Offer a custom window title from the currently loading mod.
+
+        Call this from register(game). The player can then select the title
+        using the switch beside the mod in Settings.
+        """
+        mod_info = self._current_mod_info
+        if mod_info is None:
+            raise RuntimeError("set_game_title() must be called from a mod's register() function")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Game title must be a non-empty string")
+        mod_info["game_title"] = title.strip()
 
     def add_tab(self, tab_id: str, label: str, page_box=None):
         """Add a custom tab to the notebook.
@@ -1006,11 +1092,6 @@ class FleshClicker(Gtk.Window):
     def add_button(self, tab_id: str, label: str, callback):
         """Compatibility alias for add_tab_button()."""
         self.add_tab_button(tab_id, label, callback)
-
-    def set_click_sound(self, path: str):
-        """Override the click sound. Call from register() at any time.
-        Path must point to a .wav file."""
-        self.click_sound_path = path
 
     def disable_vanilla_achievements(self):
         """Remove all built-in achievements. Mod achievements registered after
@@ -1282,6 +1363,9 @@ class FleshClicker(Gtk.Window):
         for mod_info in self.installed_mods:
             status = "Enabled" if mod_info.get("enabled") else "Disabled"
             expander = Gtk.Expander(label=f"{mod_info.get('name') or mod_info['id']} ({status})")
+            expander.set_hexpand(True)
+            mod_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            mod_row.append(expander)
 
             details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             details.set_margin_top(4)
@@ -1294,6 +1378,8 @@ class FleshClicker(Gtk.Window):
                 ("Version", mod_info.get("version") or "Unknown"),
                 ("Description", mod_info.get("description") or "No description provided."),
             ]
+            if mod_info.get("game_title"):
+                meta_lines.append(("Game title", mod_info["game_title"]))
             for label, value in meta_lines:
                 lbl = Gtk.Label(label=f"{label}: {value}", xalign=0)
                 lbl.set_wrap(True)
@@ -1305,7 +1391,39 @@ class FleshClicker(Gtk.Window):
             details.append(toggle_btn)
 
             expander.set_child(details)
-            self.mods_list_box.append(expander)
+            if mod_info.get("game_title"):
+                title_label = Gtk.Label(label="Title")
+                title_switch = Gtk.Switch()
+                title_switch.set_valign(Gtk.Align.CENTER)
+                title_switch.set_sensitive(bool(mod_info.get("enabled")))
+                title_switch.set_active(
+                    bool(mod_info.get("enabled"))
+                    and self.settings.get("game_title_mod_key") == mod_info["title_key"]
+                )
+                title_switch.set_tooltip_text(f'Use "{mod_info["game_title"]}" as the game title')
+                title_switch.connect("notify::active", self.on_mod_title_switch_changed, mod_info)
+                mod_row.append(title_label)
+                mod_row.append(title_switch)
+
+            self.mods_list_box.append(mod_row)
+
+    def on_mod_title_switch_changed(self, switch, _pspec, mod_info: dict):
+        mod_key = mod_info["title_key"]
+        if switch.get_active():
+            if not mod_info.get("enabled") or not mod_info.get("game_title"):
+                return
+            self.settings["game_title_mod_key"] = mod_key
+            message = f"Game title changed to '{mod_info['game_title']}'."
+        elif self.settings.get("game_title_mod_key") == mod_key:
+            self.settings["game_title_mod_key"] = ""
+            message = f"Game title reset to '{DEFAULT_GAME_TITLE}'."
+        else:
+            return
+
+        save_json(SETTINGS_FILE, self.settings)
+        self._apply_selected_game_title()
+        self.settings_info_label.set_text(message)
+        self.refresh_mod_settings_list()
 
     def on_mod_toggle_clicked(self, button, mod_info: dict):
         new_enabled = not mod_info.get("enabled", True)
@@ -1314,6 +1432,11 @@ class FleshClicker(Gtk.Window):
         except Exception as e:
             self.settings_info_label.set_text(f"Failed to update mod '{mod_info.get('name', mod_info['id'])}': {e}")
             return
+
+        if not new_enabled and self.settings.get("game_title_mod_key") == mod_info["title_key"]:
+            self.settings["game_title_mod_key"] = ""
+            save_json(SETTINGS_FILE, self.settings)
+            self._apply_selected_game_title()
 
         state = "enabled" if new_enabled else "disabled"
         self.settings_info_label.set_text(
@@ -1926,11 +2049,22 @@ class FleshClicker(Gtk.Window):
     # ---------- SETTINGS ----------
 
     def on_settings_changed(self, *args):
-        self.settings["enable_rpc"]           = self.rpc_switch.get_active()
+        was_rpc_enabled = bool(self.settings.get("enable_rpc"))
+        is_rpc_enabled = self.rpc_switch.get_active()
+
+        self.settings["enable_rpc"]           = is_rpc_enabled
         self.settings["squish_ms"]            = int(self.squish_spin.get_value())
         self.settings["play_click_sound"]     = self.sound_switch.get_active()
         self.settings["click_sound_volume"]   = int(self.volume_slider.get_value())
         save_json(SETTINGS_FILE, self.settings)
+
+        if is_rpc_enabled == was_rpc_enabled:
+            return
+        if is_rpc_enabled:
+            self.init_rpc()
+            self._ensure_rpc_update_timer()
+        else:
+            self.shutdown_rpc()
 
 
 class FleshApp(Gtk.Application):
