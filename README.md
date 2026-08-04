@@ -6,4 +6,5 @@ PLEASE WRITE ALL BUGS IN ISSUES
 
 ## Run
 Arch Linux command: fleshfetch 
+ 
 Windows: run fleshfetch.exe from the .zip
