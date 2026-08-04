@@ -5,4 +5,5 @@ This game is in **BETA**!!!!
 PLEASE WRITE ALL BUGS IN ISSUES
 
 ## Run
-fleshfetch
+Arch Linux command: fleshfetch 
+Windows: run fleshfetch.exe from the .zip
