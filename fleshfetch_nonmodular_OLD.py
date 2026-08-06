@@ -247,7 +247,7 @@ BASE_CURRENCIES = {
 #       cps        — added to per-second gain per upgrade owned
 #       on_buy     — granted once when the upgrade is purchased
 #
-# Legacy fps/fpc keys are still accepted transparently.
+# Legacy fps/fpc keys are still accepted btw
 
 BASE_UPGRADES = {
     "bigger_clicks": {
@@ -343,7 +343,7 @@ def save_legacy_counter(value):
         pass
 
 
-# ---------- LEADERBOARD / SUPABASE HELPERS ----------
+# ---------- LEADERBOARD HELPERS ----------
 
 SUPABASE_URL               = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY               = os.environ.get("SUPABASE_KEY", "")
