@@ -1,15 +1,28 @@
 import importlib.machinery
 import importlib.util
 import json
+import math
 import os
 import random
 import shlex
 import sys
 import time
 
+import cairo
 import gi
+
 gi.require_version("Gtk", "4.0")
+try:
+    gi.require_version("GdkPixbuf", "2.0")
+except ValueError:
+    pass
+gi.require_foreign("cairo")
+
 from gi.repository import Gtk, Gio, Gdk, GLib
+try:
+    from gi.repository import GdkPixbuf
+except (ImportError, ValueError):
+    GdkPixbuf = None
 
 from console_capture import (
     CONSOLE_FLUSH_INTERVAL_MS,
@@ -26,6 +39,326 @@ from save_manager import *
 from security import MOD_SECURITY_LEVEL_NAMES, scan_mod_security
 
 # ---------- MAIN WINDOW ----------
+
+class ModImageHandle:
+    """Small handle returned to mods for images added through the public API."""
+
+    def __init__(self, game, widget, owner, image_path="", width=None, height=None):
+        self.game = game
+        self.widget = widget
+        self.owner = owner
+        self.image_path = image_path
+        self.width = width
+        self.height = height
+        self.opacity = 1.0
+        self._removed = False
+
+    def get_widget(self):
+        return self.widget
+
+    def set_image(self, image_path: str):
+        if self._removed:
+            return False
+        return self.game._set_picture_image(self.widget, image_path, owner=self.owner, handle=self)
+
+    def set_size(self, width=None, height=None, size=None):
+        width, height = self.game._normalize_image_size(
+            size=size,
+            width=width,
+            height=height,
+            default_width=self.width or 100,
+            default_height=self.height or 100,
+        )
+        self.width = width
+        self.height = height
+        self.widget.set_size_request(width, height)
+        return self
+
+    def get_width(self):
+        return self.width
+
+    def get_height(self):
+        return self.height
+
+    def set_opacity(self, alpha):
+        try:
+            alpha = float(alpha)
+        except Exception:
+            alpha = 1.0
+        if alpha > 1.0:
+            alpha /= 100.0
+        alpha = max(0.0, min(1.0, alpha))
+        self.opacity = alpha
+        self.widget.set_opacity(alpha)
+        return self
+
+    def get_opacity(self):
+        return self.opacity
+
+    def hide(self):
+        self.widget.set_visible(False)
+        return self
+
+    def show(self):
+        self.widget.set_visible(True)
+        return self
+
+    def set_visible(self, visible: bool):
+        self.widget.set_visible(bool(visible))
+        return self
+
+    def is_visible(self):
+        return bool(self.widget.get_visible())
+
+    def remove(self):
+        if self._removed:
+            return False
+        self.game._remove_widget_from_parent(self.widget)
+        self._removed = True
+        try:
+            self.game._mod_image_widgets.remove(self)
+        except Exception:
+            pass
+        return True
+
+
+class ModSpriteHandle(ModImageHandle):
+    """Absolute-position image handle for mod-created moving sprites."""
+
+    def __init__(self, game, sprite_id, widget, owner, image_path="", x=0, y=0, width=100, height=100):
+        super().__init__(game, widget, owner, image_path=image_path, width=width, height=height)
+        self.sprite_id = sprite_id
+        self.x = float(x)
+        self.y = float(y)
+        self.vx = 0.0
+        self.vy = 0.0
+        self.rotation = 0.0
+        self._pixbuf = None
+        self._surface = None
+        self._draw_logged = False
+        self._canvas_width = int(width)
+        self._canvas_height = int(height)
+        self._attached = False
+
+    def _refresh_canvas_size(self):
+        diagonal = int(math.ceil(math.sqrt((self.width or 1) ** 2 + (self.height or 1) ** 2)))
+        self._canvas_width = max(1, diagonal)
+        self._canvas_height = max(1, diagonal)
+        if hasattr(self.widget, "set_content_width"):
+            self.widget.set_content_width(self._canvas_width)
+        if hasattr(self.widget, "set_content_height"):
+            self.widget.set_content_height(self._canvas_height)
+        self.widget.set_size_request(self._canvas_width, self._canvas_height)
+
+    def _canvas_pos(self):
+        return (
+            self.x - ((self._canvas_width - self.width) / 2.0),
+            self.y - ((self._canvas_height - self.height) / 2.0),
+        )
+
+    def set_image(self, image_path: str):
+        if self._removed:
+            return False
+        return self.game._set_sprite_image(self, image_path)
+
+    def set_size(self, width=None, height=None, size=None):
+        super().set_size(width=width, height=height, size=size)
+        self._refresh_canvas_size()
+        if self._attached and hasattr(self.game, "_sprite_layer"):
+            canvas_x, canvas_y = self._canvas_pos()
+            self.game._sprite_layer.move(self.widget, canvas_x, canvas_y)
+        self.widget.queue_draw()
+        return self
+
+    def set_rotation(self, angle):
+        try:
+            self.rotation = float(angle) % 360.0
+        except Exception:
+            self.rotation = 0.0
+        self.widget.queue_draw()
+        return self
+
+    def get_rotation(self):
+        return self.rotation
+
+    def rotate_by(self, delta):
+        return self.set_rotation(self.rotation + float(delta))
+
+    def move_to(self, x, y):
+        self.x = float(x)
+        self.y = float(y)
+        if self._attached and hasattr(self.game, "_sprite_layer"):
+            canvas_x, canvas_y = self._canvas_pos()
+            self.game._sprite_layer.move(self.widget, canvas_x, canvas_y)
+        return self
+
+    def set_pos(self, x, y):
+        return self.move_to(x, y)
+
+    def move_by(self, dx, dy):
+        return self.move_to(self.x + float(dx), self.y + float(dy))
+
+    def get_pos(self):
+        return self.x, self.y
+
+    def get_x(self):
+        return self.x
+
+    def get_y(self):
+        return self.y
+
+    def set_x(self, x):
+        return self.move_to(x, self.y)
+
+    def set_y(self, y):
+        return self.move_to(self.x, y)
+
+    def set_velocity(self, vx, vy):
+        self.vx = float(vx)
+        self.vy = float(vy)
+        return self
+
+    def get_velocity(self):
+        return self.vx, self.vy
+
+    def step(self, seconds=1.0):
+        return self.move_by(self.vx * float(seconds), self.vy * float(seconds))
+
+    def get_window_bounds(self):
+        # Do not use Gtk.Fixed's allocation as the movement boundary. A
+        # Gtk.Fixed can grow to include children moved outside the visible
+        # window, which makes the boundary chase the sprite forever.
+        overlay = getattr(self.game, "_window_overlay", None)
+        if overlay is not None:
+            width = int(overlay.get_allocated_width())
+            height = int(overlay.get_allocated_height())
+        else:
+            width = int(self.game.get_allocated_width())
+            height = int(self.game.get_allocated_height())
+
+        if width <= 0 or height <= 0:
+            return {"width": 0, "height": 0}
+
+        return {"width": width, "height": height}
+
+    def get_bounds(self):
+        window = self.get_window_bounds()
+        return {
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "right": self.x + self.width,
+            "bottom": self.y + self.height,
+            "window_width": window["width"],
+            "window_height": window["height"],
+        }
+
+    def get_edge_hit(self, margin=0):
+        margin = max(0.0, float(margin))
+        bounds = self.get_bounds()
+        window_width = bounds["window_width"]
+        window_height = bounds["window_height"]
+        left = bounds["x"] <= margin
+        top = bounds["y"] <= margin
+        right = window_width > 0 and bounds["right"] >= window_width - margin
+        bottom = window_height > 0 and bounds["bottom"] >= window_height - margin
+        return {
+            "left": left,
+            "right": right,
+            "top": top,
+            "bottom": bottom,
+            "horizontal": left or right,
+            "vertical": top or bottom,
+        }
+
+    def get_corner_hit(self, margin=0):
+        edges = self.get_edge_hit(margin)
+        if edges["top"] and edges["left"]:
+            return "top-left"
+        if edges["top"] and edges["right"]:
+            return "top-right"
+        if edges["bottom"] and edges["left"]:
+            return "bottom-left"
+        if edges["bottom"] and edges["right"]:
+            return "bottom-right"
+        return None
+
+    def is_touching_corner(self, margin=0):
+        return self.get_corner_hit(margin) is not None
+
+    def bounce(self, vx=None, vy=None, margin=0):
+        if vx is None:
+            vx = self.vx
+        if vy is None:
+            vy = self.vy
+        vx = float(vx)
+        vy = float(vy)
+        margin = max(0.0, float(margin))
+
+        # Mods can start their timers before GTK has allocated the window.
+        # Waiting here prevents sprites from moving into nowhere during startup.
+        initial_bounds = self.get_bounds()
+        if initial_bounds["window_width"] <= 0 or initial_bounds["window_height"] <= 0:
+            return {
+                "vx": self.vx,
+                "vy": self.vy,
+                "edges": {
+                    "left": False,
+                    "right": False,
+                    "top": False,
+                    "bottom": False,
+                    "horizontal": False,
+                    "vertical": False,
+                },
+                "corner": None,
+            }
+
+        self.move_by(vx, vy)
+        bounds = self.get_bounds()
+        edge_hit = self.get_edge_hit(margin)
+
+        max_x = max(margin, bounds["window_width"] - self.width - margin)
+        max_y = max(margin, bounds["window_height"] - self.height - margin)
+        new_x = self.x
+        new_y = self.y
+
+        if edge_hit["left"] and vx < 0:
+            vx = abs(vx)
+            new_x = margin
+        elif edge_hit["right"] and vx > 0:
+            vx = -abs(vx)
+            new_x = max_x
+
+        if edge_hit["top"] and vy < 0:
+            vy = abs(vy)
+            new_y = margin
+        elif edge_hit["bottom"] and vy > 0:
+            vy = -abs(vy)
+            new_y = max_y
+
+        self.vx = vx
+        self.vy = vy
+        self.move_to(new_x, new_y)
+        return {
+            "vx": self.vx,
+            "vy": self.vy,
+            "edges": edge_hit,
+            "corner": self.get_corner_hit(margin),
+        }
+
+    def bounce_velocity(self, vx=None, vy=None, margin=0):
+        return self.bounce(vx=vx, vy=vy, margin=margin)
+
+    def remove(self):
+        removed = super().remove()
+        self.game._mod_sprites.pop(self.sprite_id, None)
+        try:
+            self.game._pending_sprites.remove(self)
+        except Exception:
+            pass
+        return removed
+
 
 class FleshClicker(Gtk.Window):
     def __init__(self, app: Gtk.Application):
@@ -115,11 +448,23 @@ class FleshClicker(Gtk.Window):
         # _pending_buttons: dict of tab_id -> list of (label, callback) tuples
         self._pending_tabs    = []
         self._pending_buttons = {}
+        self._pending_images = {}
+        self._pending_sprites = []
         # map of tab_id -> Gtk.Box (the page widget), filled after build_ui
         self._tab_pages = {}
+        self._builtin_tab_ids = {"upgrades", "achievements", "leaderboard", "saves", "settings", "console", "stats"}
+        self._mod_tab_owners = {}
+        self._mod_button_widgets = []
+        self._mod_image_widgets = []
+        self._mod_sprites = {}
+        self._next_sprite_id = 1
+        self._mod_currency_owners = {}
+        self._mod_upgrade_owners = {}
+        self._mod_paths = {}
         self.loaded_mod_ids = set()
         self.installed_mods = []
         self._current_mod_info = None
+        self._active_mod_owner = None
         self.current_game_title = DEFAULT_GAME_TITLE
         self._event_hooks = {}
         self._next_event_hook_id = 1
@@ -131,6 +476,8 @@ class FleshClicker(Gtk.Window):
         self._dirty_save_timer_id = None
         self._mod_timers = {}
         self._next_mod_timer_id = 1
+        self.mod_apis = {}
+        self.mod_api_aliases = {}
         self.console_commands = {}
         self.console_aliases = {}
         self._register_builtin_click_modifiers()
@@ -151,8 +498,8 @@ class FleshClicker(Gtk.Window):
             self._pygame_mixer_ok = True
             if os.path.exists(self.click_sound_path):
                 self._sound_cache[self.click_sound_path] = pygame.mixer.Sound(self.click_sound_path)
-        except Exception as e:
-            print(f"[sound] pygame init failed, using fallback: {e}")
+        except Exception:
+            pass
 
         self.start_time      = int(time.time())
         self.rpc_last_update = 0
@@ -190,6 +537,7 @@ class FleshClicker(Gtk.Window):
         .badge-locked   { color: #f38ba8; }
         label { color: #dddddd; }
         label.security-suspicious, .security-suspicious { color: #f9e2af; }
+        label.mod-deprecation, .mod-deprecation { color: #ffff00; }
         label.security-extreme, .security-extreme { color: #ff4d6d; }
         scrolledwindow, viewport, box { background-color: #151515; }
         notebook { background-color: #151515; }
@@ -515,7 +863,18 @@ class FleshClicker(Gtk.Window):
         current = getattr(self, "_current_mod_info", None)
         if current is not None and current.get("id"):
             return current["id"]
+        active_owner = getattr(self, "_active_mod_owner", None)
+        if active_owner:
+            return active_owner
         return "__global__"
+
+    def _run_with_mod_owner(self, owner, callback, *args, **kwargs):
+        previous_owner = getattr(self, "_active_mod_owner", None)
+        self._active_mod_owner = owner if owner and owner != "__global__" else None
+        try:
+            return callback(*args, **kwargs)
+        finally:
+            self._active_mod_owner = previous_owner
 
     def on_event(self, event_name: str, callback):
         event_name = self._normalize_event_name(event_name)
@@ -558,7 +917,7 @@ class FleshClicker(Gtk.Window):
             if not callable(callback):
                 continue
             try:
-                callback(event_payload)
+                self._run_with_mod_owner(hook.get("owner"), callback, event_payload)
             except Exception as exc:
                 print(f"[events] Hook for '{event_name}' failed: {exc}")
 
@@ -593,7 +952,7 @@ class FleshClicker(Gtk.Window):
             if not timer_info:
                 return False
             try:
-                result = callback()
+                result = self._run_with_mod_owner(owner, callback)
             except Exception as exc:
                 print(f"[timers] Timer {timer_id} from '{owner}' failed: {exc}")
                 self._mod_timers.pop(timer_id, None)
@@ -903,7 +1262,7 @@ class FleshClicker(Gtk.Window):
                 "modifier": public_modifier,
             })
             try:
-                result = callback(context)
+                result = self._run_with_mod_owner(modifier_info.get("owner"), callback, context)
             except Exception as exc:
                 print(f"[click modifiers] Modifier '{modifier_info.get('key', '?')}' failed: {exc}")
                 continue
@@ -1390,8 +1749,24 @@ class FleshClicker(Gtk.Window):
             "description": str(manifest.get("description") or ""),
             "dependencies": dependencies,
             "game_title": game_title.strip(),
+            "deprecation_warnings": [],
             "path": mod_dir,
         }
+
+    def _add_mod_deprecation_warning(self, message: str, mod_info: dict = None):
+        mod_info = mod_info or getattr(self, "_current_mod_info", None)
+        if mod_info is None:
+            return
+        message = str(message or "").strip()
+        if not message:
+            return
+        warnings = mod_info.setdefault("deprecation_warnings", [])
+        if message in warnings:
+            return
+        warnings.append(message)
+        self.console_print(
+            f"[mods][deprecated] {mod_info.get('name') or mod_info.get('id')}: {message}"
+        )
 
     def _read_mod_enabled(self, mod_dir: str):
         enabled_path = os.path.join(mod_dir, "enabled.txt")
@@ -1493,6 +1868,7 @@ class FleshClicker(Gtk.Window):
                         pass
 
                 mod_info = self._get_mod_info(entry, mod_dir, manifest)
+                self._mod_paths[mod_info["id"]] = mod_dir
                 enabled, enabled_path = self._read_mod_enabled(mod_dir)
                 mod_source = "system" if mods_root == SYSTEM_MODS_DIR else "user"
                 mod_key = f"{mod_source}:{entry}"
@@ -1667,6 +2043,248 @@ class FleshClicker(Gtk.Window):
                 missing.append(dep_id if not min_version else f"{dep_id} >= {min_version}")
         return missing
 
+    def _remove_widget_from_parent(self, widget):
+        try:
+            parent = widget.get_parent()
+        except Exception:
+            parent = None
+        if parent is None:
+            return
+        try:
+            parent.remove(widget)
+        except Exception:
+            pass
+
+    def _remove_tab_page(self, tab_id: str):
+        page = self._tab_pages.pop(tab_id, None)
+        self._mod_tab_owners.pop(tab_id, None)
+        if page is None or not hasattr(self, "notebook"):
+            return
+        try:
+            page_num = self.notebook.page_num(page)
+            if page_num >= 0:
+                self.notebook.remove_page(page_num)
+        except Exception:
+            pass
+
+    def _remove_mod_runtime_objects(self):
+        for timer_id, timer_info in list(self._mod_timers.items()):
+            if timer_info.get("owner") == "__global__":
+                continue
+            try:
+                GLib.source_remove(timer_info["source_id"])
+            except Exception:
+                pass
+            self._mod_timers.pop(timer_id, None)
+
+        for event_name in list(self._event_hooks.keys()):
+            kept = [hook for hook in self._event_hooks[event_name] if hook.get("owner") == "__global__"]
+            if kept:
+                self._event_hooks[event_name] = kept
+            else:
+                self._event_hooks.pop(event_name, None)
+
+        for key, modifier_info in list(self._click_modifiers.items()):
+            if modifier_info.get("owner") != "__global__":
+                self._click_modifiers.pop(key, None)
+
+        for api_name, api_info in list(self.mod_apis.items()):
+            if api_info.get("owner") != "__global__":
+                self.unregister_api(api_name)
+
+        for command_name, command_info in list(self.console_commands.items()):
+            if command_info.get("owner") != "__global__":
+                self.unregister_console_command(command_name)
+        self._register_default_console_commands()
+
+        for item in list(self._mod_button_widgets):
+            widget = item.get("widget") if isinstance(item, dict) else item
+            self._remove_widget_from_parent(widget)
+        self._mod_button_widgets.clear()
+
+        for handle in list(self._mod_image_widgets):
+            if getattr(handle, "owner", "__global__") == "__global__":
+                continue
+            handle.remove()
+
+        for sprite_id, sprite in list(self._mod_sprites.items()):
+            if getattr(sprite, "owner", "__global__") == "__global__":
+                continue
+            sprite.remove()
+
+        for tab_id in list(self._tab_pages.keys()):
+            if tab_id not in self._builtin_tab_ids:
+                self._remove_tab_page(tab_id)
+
+        self._pending_tabs.clear()
+        self._pending_buttons.clear()
+        self._pending_images.clear()
+        self._pending_sprites = [sprite for sprite in self._pending_sprites if getattr(sprite, "owner", "__global__") == "__global__"]
+
+    def _reset_mod_registries(self):
+        self.currencies = clone_json_data(BASE_CURRENCIES)
+        self.upgrades = clone_json_data(BASE_UPGRADES)
+        self.primary_currency = "flesh"
+        self.flesh_image_path = find_app_asset("flesh.png")
+        self.click_sound_path = find_app_asset("click.wav")
+        self._mod_currency_owners = {}
+        self._mod_upgrade_owners = {}
+        self._mod_tab_owners = {}
+        self._mod_paths = {}
+        self.current_game_title = DEFAULT_GAME_TITLE
+        for key, value in DEFAULT_ACHIEVEMENTS.items():
+            existing = self.achievements.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+            merged = dict(value)
+            merged.update(existing)
+            merged["source"] = "builtin"
+            merged.pop("mod_id", None)
+            merged.pop("mod_name", None)
+            self.achievements[key] = merged
+        if hasattr(self, "upgrades_listbox"):
+            self.clear_box_children(self.upgrades_listbox)
+            self._upgrade_rows = {}
+        self.invalidate_rate_cache()
+
+    def _refresh_after_mod_reload(self):
+        self._apply_selected_game_title()
+        if hasattr(self, "picture"):
+            self.load_flesh_image()
+        self.refresh_upgrades_ui()
+        self.refresh_achievements_ui()
+        if hasattr(self, "mods_list_box"):
+            self.refresh_mod_settings_list()
+        self.update_labels()
+
+    def reload_mods(self):
+        self.flush_dirty_save(auto_backup=False)
+        self._current_mod_info = None
+        self._remove_mod_runtime_objects()
+        self._reset_mod_registries()
+        self.installed_mods = []
+        self.loaded_mod_ids = set()
+        self.load_mods()
+        self._refresh_after_mod_reload()
+        loaded = len(self.loaded_mod_ids)
+        paused = sum(1 for mod in self.installed_mods if mod.get("security_blocked") or mod.get("dependency_blocked"))
+        disabled = sum(1 for mod in self.installed_mods if not mod.get("enabled"))
+        return f"Reloaded mods. Loaded: {loaded}. Paused: {paused}. Disabled: {disabled}."
+
+    def _normalize_api_name(self, name: str) -> str:
+        return str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _resolve_api_name(self, name: str) -> str:
+        api_name = self._normalize_api_name(name)
+        return self.mod_api_aliases.get(api_name, api_name)
+
+    def register_api(self, name: str, api, version="", description="", aliases=None, replace=False):
+        """Register a shared API object for other mods to use.
+
+        Example:
+            game.register_api("particles", ParticleAPI(game), version="1.0.0")
+
+        Other mods can then call:
+            particles = game.require_api("particles")
+        """
+        api_name = self._normalize_api_name(name)
+        if not api_name:
+            raise ValueError("register_api() requires a non-empty API name")
+        if api is None:
+            raise ValueError("register_api() requires an API object")
+
+        existing = self.mod_apis.get(api_name)
+        owner = self._current_mod_namespace()
+        if existing and not replace and existing.get("owner") != owner:
+            raise ValueError(f"API '{api_name}' is already registered by {existing.get('owner', 'unknown')}")
+
+        alias_list = []
+        for alias in aliases or []:
+            alias_name = self._normalize_api_name(alias)
+            if alias_name and alias_name != api_name and alias_name not in alias_list:
+                alias_list.append(alias_name)
+
+        for alias_name in alias_list:
+            alias_target = self.mod_api_aliases.get(alias_name)
+            if alias_target and alias_target != api_name and not replace:
+                raise ValueError(f"API alias '{alias_name}' is already registered for {alias_target}")
+
+        if existing:
+            self.unregister_api(api_name)
+
+        api_info = {
+            "name": api_name,
+            "api": api,
+            "version": str(version or ""),
+            "description": str(description or ""),
+            "aliases": alias_list,
+            "owner": owner,
+        }
+        self.mod_apis[api_name] = api_info
+        for alias in alias_list:
+            self.mod_api_aliases[alias] = api_name
+        return api
+
+    def unregister_api(self, name: str):
+        api_name = self._resolve_api_name(name)
+        api_info = self.mod_apis.pop(api_name, None)
+        if not api_info:
+            return False
+        api = api_info.get("api")
+        for cleanup_name in ("cleanup", "shutdown", "destroy"):
+            cleanup = getattr(api, cleanup_name, None)
+            if callable(cleanup):
+                try:
+                    self._run_with_mod_owner(api_info.get("owner"), cleanup)
+                except Exception as exc:
+                    print(f"[apis] Cleanup for '{api_name}' failed: {exc}")
+                break
+        for alias in api_info.get("aliases", []):
+            if self.mod_api_aliases.get(alias) == api_name:
+                self.mod_api_aliases.pop(alias, None)
+        return True
+
+    def get_api(self, name: str, default=None):
+        api_name = self._resolve_api_name(name)
+        api_info = self.mod_apis.get(api_name)
+        if not api_info:
+            return default
+        return api_info.get("api", default)
+
+    def get_api_info(self, name: str):
+        api_name = self._resolve_api_name(name)
+        api_info = self.mod_apis.get(api_name)
+        if not api_info:
+            return None
+        return {
+            "name": api_info.get("name", api_name),
+            "version": api_info.get("version", ""),
+            "description": api_info.get("description", ""),
+            "aliases": list(api_info.get("aliases", [])),
+            "owner": api_info.get("owner", ""),
+        }
+
+    def has_api(self, name: str, min_version: str = "") -> bool:
+        api_name = self._resolve_api_name(name)
+        api_info = self.mod_apis.get(api_name)
+        if not api_info:
+            return False
+        return version_meets_requirement(api_info.get("version", ""), min_version)
+
+    def require_api(self, name: str, min_version: str = ""):
+        if self.has_api(name, min_version):
+            return self.get_api(name)
+        api_name = self._normalize_api_name(name)
+        requirement = api_name if not min_version else f"{api_name} >= {min_version}"
+        raise ModDependencyError(f"Missing required API: {requirement}", [requirement])
+
+    def list_apis(self):
+        return [
+            self.get_api_info(api_name)
+            for api_name in sorted(self.mod_apis)
+            if self.get_api_info(api_name) is not None
+        ]
+
     def register_console_command(self, name: str, callback, help_text="", aliases=None):
         command_name = str(name or "").strip().lower().lstrip("/")
         if not command_name or not callable(callback):
@@ -1706,15 +2324,32 @@ class FleshClicker(Gtk.Window):
             self.currencies[registry_name] = {"display_name": display_name}
         if registry_name not in self.state["currencies"]:
             self.state["currencies"][registry_name] = 0.0
+        owner = self._current_mod_namespace()
+        if owner != "__global__":
+            self._mod_currency_owners[registry_name] = owner
         self.invalidate_rate_cache()
         self.mark_save_dirty(auto_backup=False)
 
     def register_upgrade(self, uid: str, data: dict):
         """Add or update an upgrade in the registry."""
+        if isinstance(data, dict):
+            legacy_fields = [field for field in ("fpc", "fps") if field in data]
+            if legacy_fields and "currency_effects" not in data:
+                fields = ", ".join(legacy_fields)
+                self._add_mod_deprecation_warning(
+                    f"Upgrade '{uid}' uses legacy {fields} fields. Use currency_effects with cpc/cps instead."
+                )
+            if "type" in data and "category" not in data:
+                self._add_mod_deprecation_warning(
+                    f"Upgrade '{uid}' uses legacy type. Use category instead."
+                )
         if uid in self.upgrades:
             self.upgrades[uid].update(data)
         else:
             self.upgrades[uid] = data
+        owner = self._current_mod_namespace()
+        if owner != "__global__":
+            self._mod_upgrade_owners[uid] = owner
         self.invalidate_rate_cache()
 
     def register_achievement(self, key: str, data: dict):
@@ -1748,6 +2383,8 @@ class FleshClicker(Gtk.Window):
     def set_flesh_image(self, path: str):
         """Override the clickable image. Call from register() before build_ui runs."""
         self.flesh_image_path = path
+        if hasattr(self, "picture"):
+            self.load_flesh_image()
 
     def set_click_sound(self, path: str):
         """Override the click sound. Must be a .wav file.
@@ -1779,6 +2416,305 @@ class FleshClicker(Gtk.Window):
             raise ValueError("Game title must be a non-empty string")
         mod_info["game_title"] = title.strip()
 
+    def _normalize_image_size(self, size=None, width=None, height=None, default_width=100, default_height=100):
+        if size is not None:
+            try:
+                width = size[0]
+                height = size[1]
+            except Exception:
+                width = size
+                height = size
+        if width is None and height is None:
+            width = default_width
+            height = default_height
+        elif width is None:
+            width = height
+        elif height is None:
+            height = width
+        try:
+            width = int(float(width))
+        except Exception:
+            width = int(default_width or 100)
+        try:
+            height = int(float(height))
+        except Exception:
+            height = int(default_height or width or 100)
+        return max(1, width), max(1, height)
+
+    def _normalize_position(self, pos=None, x=None, y=None):
+        if pos is not None:
+            try:
+                x = pos[0]
+                y = pos[1]
+            except Exception:
+                pass
+        try:
+            x = float(0 if x is None else x)
+        except Exception:
+            x = 0.0
+        try:
+            y = float(0 if y is None else y)
+        except Exception:
+            y = 0.0
+        return x, y
+
+    def resolve_asset_path(self, path: str, owner=None) -> str:
+        """Resolve app or mod assets. Relative mod paths check the mod folder first."""
+        raw_path = str(path or "").strip()
+        if not raw_path:
+            return raw_path
+        expanded = os.path.expanduser(raw_path)
+        if os.path.isabs(expanded):
+            return expanded
+
+        candidates = []
+        mod_dir = None
+        current = getattr(self, "_current_mod_info", None)
+        if current is not None and (owner is None or current.get("id") == owner):
+            mod_dir = current.get("path")
+        if mod_dir is None and owner:
+            mod_dir = self._mod_paths.get(owner)
+        if mod_dir:
+            candidates.extend([
+                os.path.join(mod_dir, expanded),
+                os.path.join(mod_dir, "assets", expanded),
+            ])
+
+        app_asset = find_app_asset(expanded)
+        candidates.extend([
+            os.path.join(os.getcwd(), expanded),
+            app_asset,
+        ])
+
+        seen = set()
+        for candidate in candidates:
+            norm = os.path.normcase(os.path.abspath(candidate))
+            if norm in seen:
+                continue
+            seen.add(norm)
+            if os.path.exists(candidate):
+                return candidate
+        return candidates[0] if candidates else expanded
+
+    def resolve_mod_asset_path(self, path: str, owner=None) -> str:
+        return self.resolve_asset_path(path, owner=owner)
+
+    def _set_picture_image(self, picture, image_path: str, owner=None, handle=None):
+        resolved_path = self.resolve_asset_path(image_path, owner=owner)
+        try:
+            texture = Gdk.Texture.new_from_filename(resolved_path)
+            picture.set_paintable(texture)
+        except Exception as exc:
+            print(f"[images] Failed to load image '{resolved_path}': {exc}")
+            return False
+        if handle is not None:
+            handle.image_path = resolved_path
+        return True
+
+    def _set_sprite_image(self, sprite, image_path: str):
+        resolved_path = self.resolve_asset_path(image_path, owner=sprite.owner)
+
+        # Prefer a native PyCairo surface for PNG sprites. This avoids depending
+        # on the GdkPixbuf-to-Cairo bridge at draw time, which can be fragile in
+        # frozen Windows builds even when both libraries are present.
+        sprite._surface = None
+        sprite._pixbuf = None
+        sprite._draw_logged = False
+
+        if resolved_path.lower().endswith(".png"):
+            try:
+                sprite._surface = cairo.ImageSurface.create_from_png(resolved_path)
+            except Exception as exc:
+                print(f"[images] Failed to load PNG sprite image '{resolved_path}': {exc}")
+                return False
+        else:
+            if GdkPixbuf is None:
+                print("[images] Non-PNG sprites require GdkPixbuf, which is not available.")
+                return False
+            try:
+                sprite._pixbuf = GdkPixbuf.Pixbuf.new_from_file(resolved_path)
+            except Exception as exc:
+                print(f"[images] Failed to load sprite image '{resolved_path}': {exc}")
+                return False
+
+        sprite.image_path = resolved_path
+        sprite.widget.queue_draw()
+        return True
+
+    def _draw_sprite(self, sprite, cr, allocated_width, allocated_height):
+        surface = getattr(sprite, "_surface", None)
+        pixbuf = getattr(sprite, "_pixbuf", None)
+        if surface is None and pixbuf is None:
+            return
+
+        width = max(1, int(sprite.width or allocated_width or 1))
+        height = max(1, int(sprite.height or allocated_height or 1))
+
+        if surface is not None:
+            source_width = max(1, int(surface.get_width()))
+            source_height = max(1, int(surface.get_height()))
+        else:
+            source_width = max(1, int(pixbuf.get_width()))
+            source_height = max(1, int(pixbuf.get_height()))
+
+        cr.save()
+        cr.translate(allocated_width / 2.0, allocated_height / 2.0)
+        angle = float(getattr(sprite, "rotation", 0.0) or 0.0)
+        if angle:
+            cr.rotate(math.radians(angle))
+        cr.scale(width / source_width, height / source_height)
+
+        if surface is not None:
+            cr.set_source_surface(surface, -source_width / 2.0, -source_height / 2.0)
+        else:
+            Gdk.cairo_set_source_pixbuf(
+                cr,
+                pixbuf,
+                -source_width / 2.0,
+                -source_height / 2.0,
+            )
+
+        cr.paint()
+        cr.restore()
+
+
+    def _make_mod_sprite(self, image_path, width, height, owner, x=0, y=0, tooltip=None, visible=True):
+        area = Gtk.DrawingArea()
+        area.set_content_width(width)
+        area.set_content_height(height)
+        area.set_size_request(width, height)
+        area.set_visible(bool(visible))
+        area.set_can_target(False)
+        if tooltip:
+            area.set_tooltip_text(str(tooltip))
+
+        sprite_id = f"{owner}:sprite_{self._next_sprite_id}"
+        self._next_sprite_id += 1
+        sprite = ModSpriteHandle(self, sprite_id, area, owner, image_path=image_path, x=x, y=y, width=width, height=height)
+        sprite._refresh_canvas_size()
+        area.set_draw_func(lambda _area, cr, draw_width, draw_height, handle=sprite: self._draw_sprite(handle, cr, draw_width, draw_height))
+        self._set_sprite_image(sprite, image_path)
+        return sprite
+
+    def _content_fit_from_name(self, fit):
+        fit_name = str(fit or "contain").strip().lower()
+        if fit_name == "cover" and hasattr(Gtk.ContentFit, "COVER"):
+            return Gtk.ContentFit.COVER
+        if fit_name == "fill" and hasattr(Gtk.ContentFit, "FILL"):
+            return Gtk.ContentFit.FILL
+        if fit_name in ("scale-down", "scale_down") and hasattr(Gtk.ContentFit, "SCALE_DOWN"):
+            return Gtk.ContentFit.SCALE_DOWN
+        return Gtk.ContentFit.CONTAIN
+
+    def _make_mod_picture(self, image_path, width, height, owner, tooltip=None, visible=True, fit="contain"):
+        picture = Gtk.Picture()
+        picture.set_can_shrink(True)
+        picture.set_content_fit(self._content_fit_from_name(fit))
+        picture.set_size_request(width, height)
+        picture.set_visible(bool(visible))
+        if tooltip:
+            picture.set_tooltip_text(str(tooltip))
+        self._set_picture_image(picture, image_path, owner=owner)
+        return picture
+
+    def _track_mod_image(self, handle):
+        if handle not in self._mod_image_widgets:
+            self._mod_image_widgets.append(handle)
+
+    def _append_or_queue_image(self, tab_id: str, handle):
+        page = self._tab_pages.get(tab_id)
+        if page is not None:
+            page.append(handle.widget)
+        else:
+            self._pending_images.setdefault(tab_id, []).append(handle)
+
+    def add_image(self, tab_id: str, image_path: str, size=None, width=None, height=None, tooltip=None, expand=False, fit="contain"):
+        """Add an image to a normal GTK tab layout and return a handle.
+
+        Relative paths are resolved from the current mod folder, then the mod's
+        assets folder, then the app assets.
+        """
+        owner = self._current_mod_namespace()
+        width, height = self._normalize_image_size(size=size, width=width, height=height, default_width=128, default_height=128)
+        picture = self._make_mod_picture(image_path, width, height, owner, tooltip=tooltip, visible=True, fit=fit)
+        picture.set_hexpand(bool(expand))
+        handle = ModImageHandle(self, picture, owner, width=width, height=height)
+        handle.image_path = self.resolve_asset_path(image_path, owner=owner)
+        self._track_mod_image(handle)
+        self._append_or_queue_image(str(tab_id), handle)
+        return handle
+
+    def _attach_sprite(self, sprite):
+        if not hasattr(self, "_sprite_layer"):
+            if sprite not in self._pending_sprites:
+                self._pending_sprites.append(sprite)
+            return
+        if sprite._attached:
+            return
+        canvas_x, canvas_y = sprite._canvas_pos()
+        self._sprite_layer.put(sprite.widget, canvas_x, canvas_y)
+        sprite._attached = True
+
+    def create_image(
+        self,
+        image_path: str,
+        size=(100, 100),
+        pos=(0, 0),
+        tab_id=None,
+        width=None,
+        height=None,
+        x=None,
+        y=None,
+        tooltip=None,
+        visible=True,
+        fit="contain",
+        layer="window",
+    ):
+        """Create a free-positioned image sprite, or add a layout image if tab_id is set."""
+        if tab_id is not None:
+            return self.add_image(tab_id, image_path, size=size, width=width, height=height, tooltip=tooltip, fit=fit)
+
+        owner = self._current_mod_namespace()
+        width, height = self._normalize_image_size(size=size, width=width, height=height)
+        x, y = self._normalize_position(pos=pos, x=x, y=y)
+        sprite = self._make_mod_sprite(image_path, width, height, owner, x=x, y=y, tooltip=tooltip, visible=visible)
+        self._mod_sprites[sprite.sprite_id] = sprite
+        self._attach_sprite(sprite)
+        return sprite
+
+    def create_sprite(self, *args, **kwargs):
+        return self.create_image(*args, **kwargs)
+
+    def get_sprite(self, sprite_id):
+        return self._mod_sprites.get(str(sprite_id))
+
+    def _coerce_image_handle(self, image):
+        if isinstance(image, (ModImageHandle, ModSpriteHandle)):
+            return image
+        if isinstance(image, str):
+            return self._mod_sprites.get(image)
+        return None
+
+    def hide_image(self, image):
+        handle = self._coerce_image_handle(image)
+        if handle is None:
+            return False
+        handle.hide()
+        return True
+
+    def show_image(self, image):
+        handle = self._coerce_image_handle(image)
+        if handle is None:
+            return False
+        handle.show()
+        return True
+
+    def remove_image(self, image):
+        handle = self._coerce_image_handle(image)
+        if handle is None:
+            return False
+        return handle.remove()
+
     def add_tab(self, tab_id: str, label: str, page_box=None):
         """Add a custom tab to the notebook.
 
@@ -1803,17 +2739,28 @@ class FleshClicker(Gtk.Window):
             page_box.set_margin_start(4)
             page_box.set_margin_end(4)
 
+        owner = self._current_mod_namespace()
+        if owner != "__global__":
+            self._mod_tab_owners[tab_id] = owner
+
         if hasattr(self, "notebook"):
             # UI already built — add immediately
             self.notebook.append_page(page_box, Gtk.Label(label=label))
             self._tab_pages[tab_id] = page_box
             # flush any buttons that were queued for this tab
-            for btn_label, callback in self._pending_buttons.pop(tab_id, []):
+            for pending in self._pending_buttons.pop(tab_id, []):
+                if len(pending) == 2:
+                    btn_label, callback = pending
+                    button_owner = owner
+                else:
+                    btn_label, callback, button_owner = pending
                 btn = Gtk.Button(label=btn_label)
                 btn.connect("clicked", lambda b, cb=callback: cb(b))
                 page_box.append(btn)
+                if button_owner != "__global__":
+                    self._mod_button_widgets.append({"owner": button_owner, "widget": btn, "tab_id": tab_id})
         else:
-            self._pending_tabs.append((tab_id, label, page_box))
+            self._pending_tabs.append((tab_id, label, page_box, owner))
 
         return page_box
 
@@ -1838,15 +2785,19 @@ class FleshClicker(Gtk.Window):
             game.add_tab_button("settings", "Reset Stats", my_callback)
         """
         page = self._tab_pages.get(tab_id)
+        owner = self._current_mod_namespace()
         if page is not None:
             btn = Gtk.Button(label=label)
             btn.connect("clicked", lambda b, cb=callback: cb(b))
             page.append(btn)
+            if owner != "__global__":
+                self._mod_button_widgets.append({"owner": owner, "widget": btn, "tab_id": tab_id})
         else:
-            self._pending_buttons.setdefault(tab_id, []).append((label, callback))
+            self._pending_buttons.setdefault(tab_id, []).append((label, callback, owner))
 
     def add_button(self, tab_id: str, label: str, callback):
         """Compatibility alias for add_tab_button()."""
+        self._add_mod_deprecation_warning("add_button() is deprecated. Use add_tab_button() instead.")
         self.add_tab_button(tab_id, label, callback)
 
     def disable_vanilla_achievements(self):
@@ -1890,9 +2841,22 @@ class FleshClicker(Gtk.Window):
     # ---------- UI BUILD ----------
 
     def build_ui(self):
+        self._window_overlay = Gtk.Overlay()
+        self._window_overlay.set_hexpand(True)
+        self._window_overlay.set_vexpand(True)
+
         root = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
         root.set_wide_handle(True)
-        self.set_child(root)
+        self._window_overlay.set_child(root)
+
+        self._sprite_layer = Gtk.Fixed()
+        self._sprite_layer.set_hexpand(True)
+        self._sprite_layer.set_vexpand(True)
+        self._sprite_layer.set_halign(Gtk.Align.FILL)
+        self._sprite_layer.set_valign(Gtk.Align.FILL)
+        self._sprite_layer.set_can_target(False)
+        self._window_overlay.add_overlay(self._sprite_layer)
+        self.set_child(self._window_overlay)
 
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         left_box.set_margin_top(12)
@@ -1967,19 +2931,46 @@ class FleshClicker(Gtk.Window):
         self._tab_pages["stats"] = self.stats_tab_page
 
         # flush mod tabs queued before build_ui ran
-        for tab_id, label, page_box in self._pending_tabs:
+        for pending_tab in self._pending_tabs:
+            if len(pending_tab) == 3:
+                tab_id, label, page_box = pending_tab
+                tab_owner = "__global__"
+            else:
+                tab_id, label, page_box, tab_owner = pending_tab
             self.notebook.append_page(page_box, Gtk.Label(label=label))
             self._tab_pages[tab_id] = page_box
+            if tab_owner != "__global__":
+                self._mod_tab_owners[tab_id] = tab_owner
 
         # flush mod buttons queued before build_ui ran
         for tab_id, buttons in self._pending_buttons.items():
             page = self._tab_pages.get(tab_id)
             if page is None:
                 continue
-            for btn_label, callback in buttons:
+            for pending_button in buttons:
+                if len(pending_button) == 2:
+                    btn_label, callback = pending_button
+                    button_owner = "__global__"
+                else:
+                    btn_label, callback, button_owner = pending_button
                 btn = Gtk.Button(label=btn_label)
                 btn.connect("clicked", lambda b, cb=callback: cb(b))
                 page.append(btn)
+                if button_owner != "__global__":
+                    self._mod_button_widgets.append({"owner": button_owner, "widget": btn, "tab_id": tab_id})
+
+        # flush mod images queued before build_ui ran
+        for tab_id, image_handles in self._pending_images.items():
+            page = self._tab_pages.get(tab_id)
+            if page is None:
+                continue
+            for handle in image_handles:
+                page.append(handle.widget)
+        self._pending_images.clear()
+
+        for sprite in list(self._pending_sprites):
+            self._attach_sprite(sprite)
+        self._pending_sprites.clear()
 
         self.refresh_upgrades_ui()
         self.refresh_achievements_ui()
@@ -2586,6 +3577,19 @@ class FleshClicker(Gtk.Window):
         grid.attach(self.volume_slider, 1, row, 1, 1)
         row += 1
 
+        auto_reload_label = Gtk.Label(label="Auto reload mod changes", xalign=0)
+        grid.attach(auto_reload_label, 0, row, 1, 1)
+        self.mod_auto_reload_switch = Gtk.Switch()
+        self.mod_auto_reload_switch.set_halign(Gtk.Align.START)
+        self.mod_auto_reload_switch.set_hexpand(False)
+        self.mod_auto_reload_switch.set_active(bool(self.settings.get(
+            "auto_reload_mod_changes",
+            DEFAULT_SETTINGS["auto_reload_mod_changes"],
+        )))
+        self.mod_auto_reload_switch.connect("notify::active", self.on_settings_changed)
+        grid.attach(self.mod_auto_reload_switch, 1, row, 1, 1)
+        row += 1
+
         leaderboard_button = Gtk.Button(label="Add leaderboard entry")
         leaderboard_button.connect("clicked", self.on_add_leaderboard_clicked)
         grid.attach(leaderboard_button, 0, row, 2, 1)
@@ -2628,23 +3632,35 @@ class FleshClicker(Gtk.Window):
             blocked = bool(mod_info.get("security_blocked"))
             dependency_blocked = bool(mod_info.get("dependency_blocked"))
             warning_dismissed = bool(mod_info.get("security_dismissed"))
+            deprecation_warnings = list(mod_info.get("deprecation_warnings") or [])
             if dependency_blocked:
                 status = "Missing dependencies"
             elif security_level == 0:
                 status = "Enabled" if mod_info.get("enabled") else "Disabled"
+                if deprecation_warnings:
+                    status += ", deprecation warnings"
             elif blocked:
                 status = f"{security_label} warning"
             elif warning_dismissed:
                 state = "Enabled" if mod_info.get("enabled") else "Disabled"
                 status = f"{state}, warning dismissed"
+                if deprecation_warnings:
+                    status += ", deprecation warnings"
             else:
                 status = "Enabled" if mod_info.get("enabled") else "Disabled"
+                if deprecation_warnings:
+                    status += ", deprecation warnings"
 
-            expander_label = Gtk.Label(label=f"{mod_info.get('name') or mod_info['id']} ({status})", xalign=0)
+            mod_display_name = mod_info.get("name") or mod_info["id"]
+            if deprecation_warnings:
+                mod_display_name = f"{mod_display_name} (legacy)"
+            expander_label = Gtk.Label(label=f"{mod_display_name} ({status})", xalign=0)
             if security_level == 1:
                 expander_label.add_css_class("security-suspicious")
             elif security_level >= 2:
                 expander_label.add_css_class("security-extreme")
+            elif deprecation_warnings:
+                expander_label.add_css_class("mod-deprecation")
 
             expander = Gtk.Expander()
             expander.set_label_widget(expander_label)
@@ -2675,6 +3691,19 @@ class FleshClicker(Gtk.Window):
                         dep_text += " (optional)"
                     dependency_names.append(dep_text)
                 meta_lines.append(("Dependencies", ", ".join(dependency_names)))
+            provided_apis = [
+                api_info
+                for api_info in self.list_apis()
+                if api_info.get("owner") == mod_info.get("id")
+            ]
+            if provided_apis:
+                api_names = []
+                for api_info in provided_apis:
+                    api_text = api_info.get("name") or "unknown"
+                    if api_info.get("version"):
+                        api_text += f" {api_info['version']}"
+                    api_names.append(api_text)
+                meta_lines.append(("APIs", ", ".join(api_names)))
             if dependency_blocked:
                 meta_lines.append(("Missing dependencies", ", ".join(mod_info.get("dependency_missing", []))))
             if security_level > 0:
@@ -2688,6 +3717,12 @@ class FleshClicker(Gtk.Window):
                 lbl = Gtk.Label(label=f"{label}: {value}", xalign=0)
                 lbl.set_wrap(True)
                 details.append(lbl)
+            if deprecation_warnings:
+                for warning in deprecation_warnings:
+                    warning_label = Gtk.Label(label=f"Deprecation warning: {warning}", xalign=0)
+                    warning_label.set_wrap(True)
+                    warning_label.add_css_class("mod-deprecation")
+                    details.append(warning_label)
             if security_level > 0:
                 for reason in mod_info.get("security_reasons", [])[:8]:
                     reason_label = Gtk.Label(label=f"Warning reason: {reason}", xalign=0)
@@ -2770,10 +3805,10 @@ class FleshClicker(Gtk.Window):
         try:
             if response == Gtk.ResponseType.ACCEPT:
                 self._dismiss_mod_security_warning(mod_info)
-                self.settings_info_label.set_text(
-                    f"Warning dismissed for '{mod_info.get('name', mod_info['id'])}'. Restart Fleshfetch to load it."
+                self._finish_mod_change(
+                    f"Warning dismissed for '{mod_info.get('name', mod_info['id'])}'.",
+                    "load it",
                 )
-                self.refresh_mod_settings_list()
         finally:
             dialog.destroy()
 
@@ -2820,10 +3855,26 @@ class FleshClicker(Gtk.Window):
             self._apply_selected_game_title()
 
         state = "enabled" if new_enabled else "disabled"
-        self.settings_info_label.set_text(
-            f"Mod '{mod_info.get('name', mod_info['id'])}' {state}. Restart Fleshfetch to apply."
+        self._finish_mod_change(
+            f"Mod '{mod_info.get('name', mod_info['id'])}' {state}.",
+            "apply",
         )
-        self.refresh_mod_settings_list()
+
+    def _auto_reload_mod_changes_enabled(self):
+        return bool(self.settings.get(
+            "auto_reload_mod_changes",
+            DEFAULT_SETTINGS.get("auto_reload_mod_changes", True),
+        ))
+
+    def _finish_mod_change(self, message: str, action_text="apply"):
+        if self._auto_reload_mod_changes_enabled():
+            reload_message = self.reload_mods()
+            self.settings_info_label.set_text(f"{message} {reload_message}")
+        else:
+            self.settings_info_label.set_text(
+                f"{message} Run /reload or restart Fleshfetch to {action_text}."
+            )
+            self.refresh_mod_settings_list()
 
     # ---------- CONSOLE COMMANDS ----------
 
@@ -2868,6 +3919,12 @@ class FleshClicker(Gtk.Window):
             aliases=["modifiers", "clickmods"],
         )
         self.register_console_command(
+            "apis",
+            self._cmd_apis,
+            "List shared mod APIs.",
+            aliases=["api", "listapis"],
+        )
+        self.register_console_command(
             "saves",
             self._cmd_saves,
             "List save slots.",
@@ -2878,6 +3935,12 @@ class FleshClicker(Gtk.Window):
             self._cmd_save,
             "Save active progress.",
             aliases=["savegame"],
+        )
+        self.register_console_command(
+            "reload",
+            self._cmd_reload,
+            "Reload installed mods without restarting the game.",
+            aliases=["reloadmods", "rl"],
         )
         self.register_console_command(
             "print",
@@ -2924,11 +3987,12 @@ class FleshClicker(Gtk.Window):
             return
         args = parts[1:]
         callback = command_info.get("callback")
+        owner = command_info.get("owner")
         try:
-            result = callback(args, raw)
+            result = self._run_with_mod_owner(owner, callback, args, raw)
         except TypeError:
             try:
-                result = callback(args)
+                result = self._run_with_mod_owner(owner, callback, args)
             except Exception as exc:
                 self.console_print(f"Command failed: {exc}")
                 return
@@ -2997,6 +4061,20 @@ class FleshClicker(Gtk.Window):
             lines.append(f"  {modifier.get('key')}: {description} ({currency}, owner: {owner})")
         return "\n".join(lines)
 
+    def _cmd_apis(self, args, raw):
+        apis = self.list_apis()
+        if not apis:
+            return "No shared mod APIs registered."
+        lines = ["Shared mod APIs:"]
+        for api_info in apis:
+            version = api_info.get("version") or "unversioned"
+            owner = api_info.get("owner") or "unknown"
+            description = api_info.get("description") or "No description"
+            aliases = api_info.get("aliases") or []
+            alias_text = f", aliases: {', '.join(aliases)}" if aliases else ""
+            lines.append(f"  {api_info.get('name')}: {version}, owner: {owner}{alias_text} - {description}")
+        return "\n".join(lines)
+
     def _cmd_saves(self, args, raw):
         lines = ["Saves:"]
         for slot in list_save_slots():
@@ -3008,6 +4086,9 @@ class FleshClicker(Gtk.Window):
     def _cmd_save(self, args, raw):
         self.save_current_progress(auto_backup=True)
         return f"Saved '{self.active_save_name}'."
+
+    def _cmd_reload(self, args, raw):
+        return self.reload_mods()
 
     def _cmd_print(self, args, raw):
         return " ".join(args)
@@ -3759,6 +4840,7 @@ class FleshClicker(Gtk.Window):
         self.settings["squish_ms"]            = int(self.squish_spin.get_value())
         self.settings["play_click_sound"]     = self.sound_switch.get_active()
         self.settings["click_sound_volume"]   = int(self.volume_slider.get_value())
+        self.settings["auto_reload_mod_changes"] = self.mod_auto_reload_switch.get_active()
         save_json(SETTINGS_FILE, self.settings)
 
         if is_rpc_enabled == was_rpc_enabled:
