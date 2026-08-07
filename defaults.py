@@ -4,6 +4,7 @@ DEFAULT_SETTINGS = {
     "play_click_sound": False,
     "click_sound_volume": 15,
     "game_title_mod_key": "",
+    "auto_reload_mod_changes": True,
     "dismissed_mod_security_warnings": {},
     "active_save_id": "main",
     "mod_settings": {},
