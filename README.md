@@ -1,5 +1,5 @@
 # Fleshfetch
-GTK4-based clicker game written in Python. Includes a bunch of stuff. I am too lazy to list all of it but you can mod the game pretty easily. This is a joke, if you couldn't tell.
+GTK4-based clicker game written in Python. Includes a bunch of stuff. I am too lazy to list all of it but you can mod the game pretty easily. I used to say this is a joke here but I really am not sure.
 
 This game is **IN DEVELOPMENT**
 
