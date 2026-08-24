@@ -72,6 +72,7 @@ def save_legacy_counter(value):
 
 DEFAULT_SAVE_ID = "main"
 DEFAULT_SAVE_NAME = "Main Save"
+DEFAULT_SAVE_KIND = "singleplayer"
 SAVE_BACKUP_LIMIT = 10
 SAVE_AUTO_BACKUP_INTERVAL_SECONDS = 300
 SAVE_DIRTY_FLUSH_INTERVAL_MS = 750
@@ -97,6 +98,12 @@ def normalize_save_id(save_id: str) -> str:
     text = str(save_id or "").strip().lower()
     safe = "".join(ch for ch in text if ch.isalnum() or ch in ("-", "_"))
     return safe or DEFAULT_SAVE_ID
+
+
+def normalize_save_kind(save_kind: str) -> str:
+    text = str(save_kind or "").strip().lower()
+    safe = "".join(ch for ch in text if ch.isalnum() or ch in ("-", "_"))
+    return safe or DEFAULT_SAVE_KIND
 
 
 def make_save_id(name: str) -> str:
@@ -127,6 +134,7 @@ def build_save_slot_data(
     required_mods=None,
     mod_data=None,
     previous=None,
+    save_kind=None,
 ) -> dict:
     previous = previous if isinstance(previous, dict) else {}
     now = current_save_timestamp()
@@ -134,6 +142,7 @@ def build_save_slot_data(
     return {
         "id": normalize_save_id(save_id),
         "name": normalize_save_name(name),
+        "save_kind": normalize_save_kind(save_kind or previous.get("save_kind")),
         "created_at": previous.get("created_at") or now,
         "updated_at": now,
         "last_auto_backup_at": previous.get("last_auto_backup_at", 0),
@@ -151,6 +160,7 @@ def load_save_slot_data(save_id: str):
     slot_id = normalize_save_id(data.get("id") or save_id)
     data.setdefault("id", slot_id)
     data.setdefault("name", DEFAULT_SAVE_NAME if slot_id == DEFAULT_SAVE_ID else slot_id)
+    data["save_kind"] = normalize_save_kind(data.get("save_kind"))
     data.setdefault("created_at", current_save_timestamp())
     data.setdefault("updated_at", data["created_at"])
     data.setdefault("last_auto_backup_at", 0)
@@ -168,8 +178,9 @@ def write_save_slot_data(slot_data: dict):
     save_json(save_slot_path(slot_data["id"]), slot_data)
 
 
-def list_save_slots():
+def list_save_slots(save_kind=None):
     os.makedirs(SAVES_DIR, exist_ok=True)
+    wanted_kind = normalize_save_kind(save_kind) if save_kind is not None else None
     slots = []
     for filename in sorted(os.listdir(SAVES_DIR)):
         path = os.path.join(SAVES_DIR, filename)
@@ -177,7 +188,7 @@ def list_save_slots():
             continue
         save_id = os.path.splitext(filename)[0]
         slot = load_save_slot_data(save_id)
-        if slot:
+        if slot and (wanted_kind is None or slot.get("save_kind") == wanted_kind):
             slots.append(slot)
     slots.sort(key=lambda slot: str(slot.get("updated_at", "")), reverse=True)
     return slots
@@ -322,7 +333,8 @@ def ensure_save_storage(settings: dict):
     os.makedirs(SAVE_BACKUPS_DIR, exist_ok=True)
 
     slots = list_save_slots()
-    if not slots:
+    singleplayer_slots = list_save_slots(DEFAULT_SAVE_KIND)
+    if not singleplayer_slots:
         legacy_state = load_json(STATE_FILE, DEFAULT_STATE, legacy_path=LEGACY_STATE_FILE)
         legacy_achievements = load_json(
             ACHIEVEMENTS_FILE,
@@ -337,11 +349,12 @@ def ensure_save_storage(settings: dict):
             required_mods=[],
         )
         write_save_slot_data(main_slot)
-        slots = [main_slot]
+        slots.append(main_slot)
+        singleplayer_slots = [main_slot]
 
     active_id = normalize_save_id(settings.get("active_save_id") or DEFAULT_SAVE_ID)
     if not save_slot_exists(active_id):
-        active_id = normalize_save_id(slots[0]["id"])
+        active_id = normalize_save_id(singleplayer_slots[0]["id"])
     if settings.get("active_save_id") != active_id:
         settings["active_save_id"] = active_id
         save_json(SETTINGS_FILE, settings)
