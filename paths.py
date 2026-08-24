@@ -11,6 +11,11 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     EXE_DIR  = BASE_DIR
+# The native release launcher keeps the compiled app in runtime/ while assets
+# remain beside the public executable.
+LAUNCHER_ROOT = os.environ.get("FLESHFETCH_ROOT")
+if LAUNCHER_ROOT:
+    EXE_DIR = os.path.abspath(LAUNCHER_ROOT)
 INTERNAL_DIR = os.path.join(EXE_DIR, "_internal")
 ASSETS_DIR = os.path.join(EXE_DIR, "assets")
 BASE_ASSETS_DIR = os.path.join(BASE_DIR, "assets")
