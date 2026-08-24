@@ -1,4 +1,8 @@
 # Fleshfetch
+
+> [!WARNING]
+> This is the experimental branch. It may be buggy, incomplete, or incompatible with stable saves and mods. Stable releases are on the [`main`](https://github.com/xtexecute/fleshfetch/tree/main) branch.
+
 A GTK4-based modding framework and clicker engine(?) written in Python. <br>
 This repository contains the core modding API, alongside **Mod #1 (The Base Game)** which serves as the game you see when installed. You can mod the game pretty easily. <br>
 I used to say this is a joke here, but I really am not sure anymore.
