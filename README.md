@@ -6,8 +6,8 @@ I used to say this is a joke here, but I really am not sure anymore.
 This game is **IN DEVELOPMENT**
 
 PLEASE WRITE ALL BUGS IN ISSUES <br>
-DO NOT WRITE [EXPERIMENTAL REPO](https://github.com/xtexecute/fleshfetch-experimental) BUGS HERE <br>
-THEY GO IN THE EXPERIMENTAL REPO'S [ISSUES PAGE](https://github.com/xtexecute/fleshfetch-experimental/issues)
+Experimental builds are developed on the [`experimental`](https://github.com/xtexecute/fleshfetch/tree/experimental) branch and published as prereleases. <br>
+Use the experimental bug report form for experimental builds.
 
 ## Run
 Arch Linux command: fleshfetch 

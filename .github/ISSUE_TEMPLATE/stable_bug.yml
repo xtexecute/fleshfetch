@@ -1,0 +1,41 @@
+name: Stable bug report
+description: Report a problem in the latest stable Fleshfetch release.
+title: "[Stable Bug]: "
+labels:
+  - bug
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Fleshfetch version
+      placeholder: v1.3.2
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - Arch Linux / AUR
+        - Other Linux distribution
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: Tell us exactly how to make the bug happen.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Add startup.log, console output, or screenshots if available.
