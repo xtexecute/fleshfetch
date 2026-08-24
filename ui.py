@@ -390,6 +390,7 @@ class FleshClicker(Gtk.Window):
             save_json(SETTINGS_FILE, self.settings)
 
         self.active_save_name = normalize_save_name(active_slot.get("name") or DEFAULT_SAVE_NAME)
+        self.active_save_kind = normalize_save_kind(active_slot.get("save_kind"))
         self.active_save_created_at = active_slot.get("created_at") or current_save_timestamp()
         self.active_save_updated_at = active_slot.get("updated_at") or self.active_save_created_at
         self.active_save_last_auto_backup_at = active_slot.get("last_auto_backup_at", 0)
@@ -621,6 +622,7 @@ class FleshClicker(Gtk.Window):
             self._emit_event("load", {
                 "save_id": self.active_save_id,
                 "save_name": self.active_save_name,
+                "save_kind": self.active_save_kind,
                 "reason": "startup",
             })
             self.start_runtime_services()
@@ -840,6 +842,7 @@ class FleshClicker(Gtk.Window):
         return {
             "save_id": normalize_save_id(slot.get("id") or self.active_save_id),
             "save_name": normalize_save_name(slot.get("name") or self.active_save_id),
+            "save_kind": normalize_save_kind(slot.get("save_kind")),
             "missing_mods": missing_mods,
         }
 
@@ -1302,6 +1305,7 @@ class FleshClicker(Gtk.Window):
     def _apply_save_slot_without_presaving_current(self, slot: dict, reason="load", emit_load_event=True):
         self.active_save_id = normalize_save_id(slot["id"])
         self.active_save_name = normalize_save_name(slot.get("name") or self.active_save_id)
+        self.active_save_kind = normalize_save_kind(slot.get("save_kind"))
         self.active_save_created_at = slot.get("created_at") or current_save_timestamp()
         self.active_save_updated_at = slot.get("updated_at") or self.active_save_created_at
         self.active_save_last_auto_backup_at = slot.get("last_auto_backup_at", 0)
@@ -1327,6 +1331,7 @@ class FleshClicker(Gtk.Window):
             self._emit_event("load", {
                 "save_id": self.active_save_id,
                 "save_name": self.active_save_name,
+                "save_kind": self.active_save_kind,
                 "reason": reason,
             })
 
@@ -1371,6 +1376,7 @@ class FleshClicker(Gtk.Window):
             "last_auto_backup_at": getattr(self, "active_save_last_auto_backup_at", 0),
             "required_mods": getattr(self, "active_save_required_mods", []),
             "mod_data": getattr(self, "save_namespaces", {}),
+            "save_kind": getattr(self, "active_save_kind", DEFAULT_SAVE_KIND),
         }
         slot = build_save_slot_data(
             self.active_save_id,
@@ -1380,18 +1386,21 @@ class FleshClicker(Gtk.Window):
             required_mods=self._current_required_mods(),
             mod_data=self.save_namespaces,
             previous=previous,
+            save_kind=self.active_save_kind,
         )
         if auto_backup:
             maybe_auto_backup_save_slot(slot)
         write_save_slot_data(slot)
         self.active_save_name = slot["name"]
+        self.active_save_kind = normalize_save_kind(slot.get("save_kind"))
         self.active_save_created_at = slot["created_at"]
         self.active_save_updated_at = slot["updated_at"]
         self.active_save_last_auto_backup_at = slot.get("last_auto_backup_at", 0)
         self.active_save_required_mods = list(slot.get("required_mods", []))
-        save_json(STATE_FILE, self.state)
-        save_json(ACHIEVEMENTS_FILE, self.achievements)
-        save_legacy_counter(self.state.get("currencies", {}).get("flesh", 0.0))
+        if self.active_save_kind == DEFAULT_SAVE_KIND:
+            save_json(STATE_FILE, self.state)
+            save_json(ACHIEVEMENTS_FILE, self.achievements)
+            save_legacy_counter(self.state.get("currencies", {}).get("flesh", 0.0))
         if hasattr(self, "_save_dirty"):
             self._save_dirty = False
             self._save_dirty_auto_backup = False
@@ -1401,6 +1410,7 @@ class FleshClicker(Gtk.Window):
                 self._emit_event("save", {
                     "save_id": self.active_save_id,
                     "save_name": self.active_save_name,
+                    "save_kind": self.active_save_kind,
                     "slot": slot,
                     "auto_backup": bool(auto_backup),
                 })
@@ -1472,6 +1482,7 @@ class FleshClicker(Gtk.Window):
         backup_save_slot(slot["id"], reason="preload")
         self.active_save_id = normalize_save_id(slot["id"])
         self.active_save_name = normalize_save_name(slot.get("name") or self.active_save_id)
+        self.active_save_kind = normalize_save_kind(slot.get("save_kind"))
         self.active_save_created_at = slot.get("created_at") or current_save_timestamp()
         self.active_save_updated_at = slot.get("updated_at") or self.active_save_created_at
         self.active_save_last_auto_backup_at = slot.get("last_auto_backup_at", 0)
@@ -1496,11 +1507,12 @@ class FleshClicker(Gtk.Window):
         self._emit_event("load", {
             "save_id": self.active_save_id,
             "save_name": self.active_save_name,
+            "save_kind": self.active_save_kind,
             "reason": "manual",
         })
         return True, f"Loaded save '{self.active_save_name}'."
 
-    def create_save_slot(self, name: str):
+    def create_save_slot(self, name: str, save_kind=DEFAULT_SAVE_KIND):
         self.save_current_progress(auto_backup=True)
         save_name = normalize_save_name(name)
         save_id = make_save_id(save_name)
@@ -1513,12 +1525,14 @@ class FleshClicker(Gtk.Window):
             fresh_achievements,
             required_mods=self._current_required_mods(),
             mod_data={},
+            save_kind=save_kind,
         )
         write_save_slot_data(slot)
         self._apply_save_slot_without_presaving_current(slot, reason="create")
         self._emit_event("save_created", {
             "save_id": slot["id"],
             "save_name": slot["name"],
+            "save_kind": slot["save_kind"],
         })
         return slot
 
@@ -1553,6 +1567,7 @@ class FleshClicker(Gtk.Window):
             source.get("achievements", DEFAULT_ACHIEVEMENTS),
             required_mods=source.get("required_mods", []),
             mod_data=source.get("mod_data", {}),
+            save_kind=source.get("save_kind"),
         )
         write_save_slot_data(slot)
         return True, f"Duplicated save as '{slot['name']}'.", slot
@@ -1564,6 +1579,11 @@ class FleshClicker(Gtk.Window):
         slot = load_save_slot_data(target_id)
         if not slot:
             return False, "Save could not be deleted."
+        if (
+            normalize_save_kind(slot.get("save_kind")) == DEFAULT_SAVE_KIND
+            and len(list_save_slots(DEFAULT_SAVE_KIND)) <= 1
+        ):
+            return False, "Keep at least one normal save."
 
         backup_save_slot(target_id, reason="predelete")
         try:
@@ -1585,13 +1605,18 @@ class FleshClicker(Gtk.Window):
             return False, f"Failed to export save: {exc}"
         return True, f"Exported save '{normalize_save_name(slot.get('name') or target_id)}'."
 
-    def import_save_slot(self, import_path: str):
+    def import_save_slot(self, import_path: str, expected_save_kind=None):
         try:
             imported = read_save_slot_file(import_path)
         except Exception as exc:
             return False, f"Failed to import save: {exc}", None
 
         original_name = normalize_save_name(imported.get("name") or "Imported Save")
+        imported_kind = normalize_save_kind(imported.get("save_kind"))
+        if expected_save_kind is not None:
+            expected_kind = normalize_save_kind(expected_save_kind)
+            if imported_kind != expected_kind:
+                return False, f"This is a {imported_kind} save, not a {expected_kind} save.", None
         imported_id = normalize_save_id(imported.get("id") or make_save_id(original_name))
         save_name = original_name
         if save_slot_exists(imported_id):
@@ -1611,6 +1636,7 @@ class FleshClicker(Gtk.Window):
             required_mods=imported.get("required_mods", []),
             mod_data=imported.get("mod_data", {}),
             previous=previous,
+            save_kind=imported_kind,
         )
         write_save_slot_data(slot)
         return True, f"Imported save '{slot['name']}'.", slot
@@ -1642,6 +1668,7 @@ class FleshClicker(Gtk.Window):
             if not slot:
                 return False, "Restored backup could not be loaded."
             self.active_save_name = normalize_save_name(slot.get("name") or target_id)
+            self.active_save_kind = normalize_save_kind(slot.get("save_kind"))
             self.active_save_created_at = slot.get("created_at") or current_save_timestamp()
             self.active_save_updated_at = slot.get("updated_at") or self.active_save_created_at
             self.active_save_last_auto_backup_at = slot.get("last_auto_backup_at", 0)
@@ -1661,6 +1688,7 @@ class FleshClicker(Gtk.Window):
             self._emit_event("load", {
                 "save_id": self.active_save_id,
                 "save_name": self.active_save_name,
+                "save_kind": self.active_save_kind,
                 "reason": "restore",
             })
         return True, f"Restored backup {backup_display_name(backup_path)}."
@@ -3078,7 +3106,7 @@ class FleshClicker(Gtk.Window):
             return
         self.clear_box_children(self.saves_list_box)
 
-        slots = list_save_slots()
+        slots = list_save_slots(DEFAULT_SAVE_KIND)
         if not slots:
             self.saves_list_box.append(Gtk.Label(label="No saves found.", xalign=0))
             return
@@ -3202,7 +3230,7 @@ class FleshClicker(Gtk.Window):
 
     def on_create_save_clicked(self, button):
         name = self.new_save_entry.get_text().strip() if hasattr(self, "new_save_entry") else ""
-        slot = self.create_save_slot(name or "New Save")
+        slot = self.create_save_slot(name or "New Save", save_kind=DEFAULT_SAVE_KIND)
         self.saves_info_label.set_text(f"Created fresh save '{slot['name']}'.")
         self.new_save_entry.set_text("")
         self.refresh_saves_list()
@@ -3272,6 +3300,7 @@ class FleshClicker(Gtk.Window):
                 self._emit_event("load", {
                     "save_id": self.active_save_id,
                     "save_name": self.active_save_name,
+                    "save_kind": self.active_save_kind,
                     "reason": "startup_missing_accepted",
                     "missing_mods": list(missing_info.get("missing_mods", [])),
                 })
@@ -3460,7 +3489,7 @@ class FleshClicker(Gtk.Window):
                 file_obj = dialog.get_file()
                 path = file_obj.get_path() if file_obj else ""
                 if path:
-                    ok, message, slot = self.import_save_slot(path)
+                    ok, message, slot = self.import_save_slot(path, expected_save_kind=DEFAULT_SAVE_KIND)
                     self.saves_info_label.set_text(message)
                 else:
                     self.saves_info_label.set_text("Import failed: no file path selected.")
