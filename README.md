@@ -10,3 +10,7 @@ PLEASE WRITE ALL BUGS IN ISSUES
 Arch Linux command: fleshfetch 
  
 Windows: run fleshfetch.exe from the .zip
+
+<br><br><br><br><br><br>
+
+<sub>The Flesh image by Sifat wizard via Vecteezy.</sub>
