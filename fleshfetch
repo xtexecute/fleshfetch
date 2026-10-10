@@ -5,4 +5,4 @@ import os
 # Path where the Python script is installed
 script = "/usr/share/fleshfetch/fleshfetch.py"
 
-os.execv(sys.executable, [sys.executable, script])
+os.execv(sys.executable, [sys.executable, script, *sys.argv[1:]])
