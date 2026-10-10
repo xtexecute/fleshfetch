@@ -17,7 +17,11 @@ PLEASE WRITE ALL BUGS IN ISSUES
 Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Experimental builds are published as prereleases. Use the experimental bug report form for experimental and bleeding-edge builds.
 
 ## Run
-Arch Linux command: fleshfetch 
+Arch Linux command: `fleshfetch`
+
+Run `fleshfetch -I` or `fleshfetch --info` to open the read-only terminal
+browser for saves, stats, upgrades, and installed mods. Use the arrow keys to
+navigate, Enter to open an item, and Ctrl+X to exit.
  
 Windows: run fleshfetch.exe from the .zip
 
