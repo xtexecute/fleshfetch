@@ -1,6 +1,6 @@
 import time
 
-from gtk_compat import GLib
+import runtime_scheduler as GLib
 
 # ---------- OPTIONAL DISCORD RPC ----------
 try:
