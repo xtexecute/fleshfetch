@@ -2,7 +2,6 @@ import os
 
 import requests
 
-from gtk_compat import Gtk
 
 # ---------- LEADERBOARD / SUPABASE HELPERS ----------
 
@@ -77,6 +76,7 @@ def fetch_leaderboard_entries():
 
 class LeaderboardMixin:
     def build_leaderboard_page(self):
+        from gtk_compat import Gtk
         self.leaderboard_page.set_margin_top(4)
         self.leaderboard_page.set_margin_bottom(4)
         self.leaderboard_page.set_margin_start(4)
