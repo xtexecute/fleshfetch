@@ -1,0 +1,28 @@
+# Local release-candidate package. Place the source ZIP beside this PKGBUILD.
+pkgname=fleshfetch-qt-test
+pkgver=1.4.0rc1
+pkgrel=1
+pkgdesc='Fleshfetch Qt release candidate'
+arch=('x86_64')
+url='https://github.com/xtexecute/fleshfetch'
+license=('MIT')
+depends=('python' 'pyside6' 'qt6-declarative' 'qt6-multimedia' 'qt6-multimedia-ffmpeg' 'python-requests')
+source=('ff_v1.4.0-rc1_source.zip')
+sha256sums=('SKIP')
+conflicts=('fleshfetch')
+
+package() {
+    cd "$srcdir/fleshfetch"
+    install -dm755 "$pkgdir/usr/share/fleshfetch"
+    for module in *.py; do
+        install -m644 "$module" "$pkgdir/usr/share/fleshfetch/"
+    done
+    cp -r qml assets "$pkgdir/usr/share/fleshfetch/"
+    install -Dm644 flesh.png "$pkgdir/usr/share/fleshfetch/assets/flesh.png"
+    install -Dm644 click.wav "$pkgdir/usr/share/fleshfetch/assets/click.wav"
+    install -Dm644 default.conf "$pkgdir/usr/share/fleshfetch/default.conf"
+    install -Dm755 fleshfetch "$pkgdir/usr/bin/fleshfetch"
+    install -Dm644 dev.xtexecute.fleshfetch.desktop "$pkgdir/usr/share/applications/dev.xtexecute.fleshfetch.desktop"
+    install -Dm644 dev.xtexecute.fleshfetch.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/dev.xtexecute.fleshfetch.png"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
