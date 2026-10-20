@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import os
 
-from gtk_compat import GLib, Gtk
+import runtime_scheduler as GLib
 
 from defaults import BASE_UPGRADES, DEFAULT_ACHIEVEMENTS
 
@@ -483,6 +485,8 @@ class ModApiMixin:
         tab is added immediately, otherwise it is queued and added at build time.
         """
         if page_box is None:
+            from gtk_compat import Gtk
+
             page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             page_box.set_margin_top(4)
             page_box.set_margin_bottom(4)
@@ -494,6 +498,8 @@ class ModApiMixin:
             self._mod_tab_owners[tab_id] = owner
 
         if hasattr(self, "notebook"):
+            from gtk_compat import Gtk
+
             # UI already built — add immediately
             self.notebook.append_page(page_box, Gtk.Label(label=label))
             self._tab_pages[tab_id] = page_box
@@ -537,6 +543,8 @@ class ModApiMixin:
         page = self._tab_pages.get(tab_id)
         owner = self._current_mod_namespace()
         if page is not None:
+            from gtk_compat import Gtk
+
             btn = Gtk.Button(label=label)
             btn.connect("clicked", lambda b, cb=callback: cb(b))
             page.append(btn)
