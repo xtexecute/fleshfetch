@@ -1,11 +1,12 @@
 # Fleshfetch 1.4 release candidate
 
-This is a local Qt release candidate. It has not been published to GitHub or AUR.
+RC1 is published on GitHub. This working copy contains the RC2 fixes.
+The AUR package has not been updated to Qt.
 FFTogether network testing is deferred.
 
 ## Windows
 
-Extract `ff_v1.4.0-rc1_win.zip` completely. Open `fleshfetch/fleshfetch.exe`.
+Extract `ff_v1.4.0-rc2_win.zip` completely. Open `fleshfetch/fleshfetch.exe`.
 Keep `assets` and `runtime` beside it. Python, GTK and MSYS2 are not required.
 The source build uses Nuitka standalone, not a self-extracting onefile bundle.
 
