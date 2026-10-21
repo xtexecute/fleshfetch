@@ -46,7 +46,7 @@ def main():
     if not (dist / "PySide6" / "QtCore.pyd").is_file():
         from restore_nuitka_payload import restore
         restore()
-    release = ROOT / "output" / "fleshfetch-1.4.0-rc1-windows" / "fleshfetch"
+    release = ROOT / "output" / "fleshfetch-1.4.0-rc2-windows" / "fleshfetch"
     if release.exists():
         raise FileExistsError(f"Release folder already exists: {release}")
     shutil.copytree(dist, release / "runtime")
@@ -74,7 +74,7 @@ def main():
                     target = release / "runtime" / "licenses" / name / item.name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
-    archive = ROOT / "output" / "ff_v1.4.0-rc1_win.zip"
+    archive = ROOT / "output" / "ff_v1.4.0-rc2_win.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as package:
         for path in sorted(release.rglob("*")):
             if path.is_file() and path.suffix.lower() != ".pdb":
