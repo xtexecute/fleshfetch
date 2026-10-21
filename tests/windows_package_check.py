@@ -70,7 +70,7 @@ def own_window(pids):
 def main():
     from PySide6.QtGui import QGuiApplication
     app = QGuiApplication([])
-    archive = ROOT / "output" / "ff_v1.4.0-rc1_win.zip"
+    archive = ROOT / "output" / "ff_v1.4.0-rc2_win.zip"
     test_root = ROOT / ".qt-test-data"
     test_root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=test_root) as temp:
