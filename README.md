@@ -17,8 +17,10 @@ PLEASE WRITE ALL BUGS IN ISSUES
 Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Experimental builds are published as prereleases. Use the experimental bug report form for experimental and bleeding-edge builds.
 
 ## Run
-For this Qt development build, run `python main.py`. Dependencies and Windows/
+Run `python main.py` for the default Qt frontend. Dependencies and Windows/
 Arch testing instructions are in [TESTING_1.4.md](TESTING_1.4.md).
+The optional GTK frontend is available from source with `python main.py --gtk`
+and requires the original GTK dependencies. It is not bundled in the Windows Qt build.
 
 Arch Linux command: `fleshfetch`
 
