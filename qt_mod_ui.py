@@ -690,7 +690,8 @@ class QtModUiMixin:
         return handle.remove() if handle is not None else False
 
     def has_qt_mod_motion(self):
-        return any(image.vx or image.vy for image in self._qt_images.values())
+        return any((image.vx or image.vy) and not image._manual_motion
+                   for image in self._qt_images.values())
 
     def advance_qt_mod_ui(self, seconds=0.016):
         seconds = max(0.0, float(seconds))
