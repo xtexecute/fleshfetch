@@ -1,7 +1,8 @@
 # Qt Development Build
 
-This checkout runs the Qt Quick frontend by default. It is separate from the
-released game and has not been pushed or packaged for release.
+Qt Quick is the default frontend in the published 1.4 release candidates.
+The optional GTK frontend remains available from source through `--gtk`;
+it is not included in the Windows Qt package.
 
 Run on Windows:
 
@@ -45,8 +46,10 @@ opacity, velocity and bounds helpers. A velocity is interpreted as pixels per
 second and is advanced by the frontend. Calling `step()` or `bounce()` selects
 manual movement so older mods with their own physics timer are not advanced
 twice. `sprite.set_auto_motion(True)` resumes automatic velocity movement.
-Sprite positions use a separate 16 ms model update; moving sprites keep their
-QML items and textures instead of rebuilding through the general UI snapshots.
+Sprite positions use a separate 16 ms model update while automatic motion is
+active. The timer stops when idle; manual edits wake it to update the model.
+Moving sprites keep their QML items and textures instead of rebuilding through
+the general UI snapshots.
 
 The Qt frontend includes a compatibility adapter for common old GTK mods.
 `gi.repository`, `gtk_compat`, basic GTK controls, page_box containers, widget
@@ -70,5 +73,5 @@ player data, exercises controls, drawing, input and reload, and optionally smoke
 tests the locally installed older mods. It never opens a multiplayer connection.
 
 Player data uses the existing Fleshfetch configuration folder. Back up saves
-before trying this development build; do not run it alongside the released
-game against the same data. Tests use isolated temporary configuration folders.
+before trying a release candidate; do not run it alongside another version
+against the same data. Tests use isolated temporary configuration folders.
