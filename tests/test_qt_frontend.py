@@ -11,6 +11,64 @@ import unittest
 
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "Qt is not installed")
 class QtFrontendTests(unittest.TestCase):
+    def test_motion_timer_sleeps_and_wakes_for_sprite_updates(self):
+        self.run_game_script('''
+import sys
+from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
+app = QApplication([])
+from paths import ensure_app_dirs, find_app_asset
+ensure_app_dirs()
+from qt_frontend import QtGame
+sys.excepthook = sys.__excepthook__
+game = QtGame()
+try:
+    QTest.qWait(50)
+    assert not game._motion.isActive()
+    ticks = []
+    game._motion.timeout.connect(lambda: ticks.append(1))
+    QTest.qWait(80)
+    assert not ticks
+    sprite = game.create_sprite(find_app_asset('flesh.png'), pos=(0, 0))
+    QTest.qWait(50)
+    assert game.spriteModel.rowCount() == 1
+    assert not game._motion.isActive()
+    sprite.set_velocity(100, 0)
+    assert game._motion.isActive()
+    QTest.qWait(80)
+    assert sprite.get_x() > 0
+    sprite.set_velocity(0, 0)
+    QTest.qWait(50)
+    assert not game._motion.isActive()
+    sprite.move_to(200, 30)
+    QTest.qWait(50)
+    record = game.spriteModel.data(game.spriteModel.index(0), game.spriteModel.SpriteRole)
+    assert (record['x'], record['y']) == (200, 30)
+    assert not game._motion.isActive()
+    sprite.set_velocity(100, 0)
+    sprite.step(0)
+    QTest.qWait(50)
+    assert not game._motion.isActive()
+    x = sprite.get_x()
+    sprite.set_auto_motion(True)
+    assert game._motion.isActive()
+    QTest.qWait(80)
+    assert sprite.get_x() > x
+    sprite.remove()
+    QTest.qWait(50)
+    assert game.spriteModel.rowCount() == 0
+    assert not game._motion.isActive()
+    game._active_mod_owner = 'motion-test'
+    sprite = game.create_sprite(find_app_asset('flesh.png'))
+    sprite.set_velocity(100, 0)
+    game._remove_mod_runtime_objects()
+    QTest.qWait(50)
+    assert not game._motion.isActive()
+finally:
+    game.shutdown()
+    assert not game._motion.isActive()
+''')
+
     def test_leaderboard_refresh_submit_and_errors_are_nonblocking(self):
         self.run_game_script('''
 import sys, time
@@ -26,23 +84,28 @@ with patch('qt_leaderboard._leaderboard_configured', return_value=True):
     game = QtGame()
 try:
     controller = game.leaderboard
+    def wait_for_idle():
+        deadline = time.monotonic() + 3
+        while controller.state['busy'] and time.monotonic() < deadline:
+            QTest.qWait(10)
+        assert not controller.state['busy'], controller.state
     def fetch():
         time.sleep(.04)
         return True, '', [{'username': 'Tester', 'flesh_amount': 5}]
     with patch('qt_leaderboard.fetch_leaderboard_entries', side_effect=fetch):
         controller.refresh()
         assert controller.state['busy']
-        QTest.qWait(150)
+        wait_for_idle()
         assert not controller.state['busy']
         assert controller.state['rows'][0]['username'] == 'Tester'
         game.set_currency('flesh', 17)
         with patch('qt_leaderboard.submit_leaderboard_entry', return_value=(True, {})) as submit:
             controller.submit('Tester')
-            QTest.qWait(150)
+            wait_for_idle()
             submit.assert_called_once_with('Tester', 17)
     with patch('qt_leaderboard.fetch_leaderboard_entries', return_value=(False, 'offline', [])):
         controller.refresh()
-        QTest.qWait(150)
+        wait_for_idle()
         assert 'offline' in controller.state['message']
         assert not controller.state['busy']
 finally:
