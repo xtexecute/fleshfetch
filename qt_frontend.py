@@ -178,7 +178,7 @@ class QtGame(
             self._motion.setInterval(16)
             self._motion.timeout.connect(self._step_motion)
             self._motion_time = time.monotonic()
-            self._motion.start()
+            self._sync_motion_timer()
             QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
             self._publish()
             if not missing:
@@ -237,6 +237,7 @@ class QtGame(
 
     def _notify_sprites(self):
         self._sprites_dirty = True
+        self._sync_motion_timer()
 
     def set_currency(self, registry_name, value):
         GameStateMixin.set_currency(self, registry_name, value)
@@ -246,6 +247,7 @@ class QtGame(
         self._catalog_dirty = True
         self._live_dirty = True
         self._sprites_dirty = True
+        self._sync_motion_timer()
 
     update_labels = _notify_live
     refresh_upgrades_ui = _notify_catalog
@@ -359,6 +361,17 @@ class QtGame(
                 for image in data["images"] if image["tab_id"] is not None],
         }
 
+    def _sync_motion_timer(self):
+        timer = getattr(self, "_motion", None)
+        if timer is None or self._closed:
+            return
+        if self._sprites_dirty or self.has_qt_mod_motion():
+            if not timer.isActive():
+                self._motion_time = time.monotonic()
+                timer.start()
+        else:
+            timer.stop()
+
     def _step_motion(self):
         now = time.monotonic()
         seconds = min(0.1, now - self._motion_time)
@@ -367,6 +380,7 @@ class QtGame(
         if self._sprites_dirty:
             self._sprites_dirty = False
             self._sprite_model.sync(self._sprite_snapshot())
+        self._sync_motion_timer()
 
     def _begin_play(self, reason):
         self._emit_event("load", {"save_id": self.active_save_id, "save_name": self.active_save_name,
