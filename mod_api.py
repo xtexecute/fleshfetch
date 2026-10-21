@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import runtime_scheduler as GLib
 
@@ -64,24 +65,34 @@ def normalize_mod_dependencies(raw_dependencies):
 def version_meets_requirement(version: str, required: str) -> bool:
     if not required:
         return True
-    version = str(version or "")
-    required = str(required or "")
+    version = str(version or "").strip()
+    required = str(required or "").strip()
     if version == required:
         return True
 
     def parts(text):
-        values = []
-        for piece in text.replace("-", ".").split("."):
-            digits = "".join(ch for ch in piece if ch.isdigit())
-            values.append(int(digits or 0))
-        return values
+        match = re.fullmatch(
+            r"[vV]?([0-9]+(?:\.[0-9]+)*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+            r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", text)
+        if match is None:
+            return None
+        core = [int(piece) for piece in match[1].split(".")]
+        # Numeric prerelease identifiers sort before text; a final release
+        # sorts after every prerelease. Build metadata has no precedence.
+        prerelease = tuple((0, int(piece)) if piece.isdigit() else (1, piece)
+                           for piece in match[2].split(".")) if match[2] else ()
+        return core, (1, ()) if not match[2] else (0, prerelease)
 
-    current_parts = parts(version)
-    required_parts = parts(required)
+    current = parts(version)
+    minimum = parts(required)
+    if current is None or minimum is None:
+        return False
+    current_parts, current_pre = current
+    required_parts, required_pre = minimum
     size = max(len(current_parts), len(required_parts))
     current_parts += [0] * (size - len(current_parts))
     required_parts += [0] * (size - len(required_parts))
-    return current_parts >= required_parts
+    return (current_parts, current_pre) >= (required_parts, required_pre)
 
 
 class ModApiMixin:
