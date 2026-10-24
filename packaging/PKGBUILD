@@ -1,13 +1,13 @@
 # Local release-candidate package. Place the source ZIP beside this PKGBUILD.
 pkgname=fleshfetch-qt-test
-pkgver=1.4.0rc1
+pkgver=1.4.0
 pkgrel=1
 pkgdesc='Fleshfetch Qt release candidate'
 arch=('x86_64')
 url='https://github.com/xtexecute/fleshfetch'
 license=('MIT')
 depends=('python' 'pyside6' 'qt6-declarative' 'qt6-multimedia' 'qt6-multimedia-ffmpeg' 'python-requests')
-source=('ff_v1.4.0-rc1_source.zip')
+source=('ff_v1.4.0_source.zip')
 sha256sums=('SKIP')
 conflicts=('fleshfetch')
 
