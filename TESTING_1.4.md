@@ -1,12 +1,13 @@
-# Fleshfetch 1.4 release candidate
+# Fleshfetch 1.4.0
 
-RC1 is published on GitHub. This working copy contains the RC2 fixes.
-The AUR package has not been updated to Qt.
+This version includes the Qt frontend, idle sprite timer and dependency-version
+fixes, the Windows CPU compatibility build fix, and Debian 13 packaging.
+The separate AUR checkout has not been updated to Qt.
 FFTogether network testing is deferred.
 
 ## Windows
 
-Extract `ff_v1.4.0-rc2_win.zip` completely. Open `fleshfetch/fleshfetch.exe`.
+Extract `ff_v1.4.0_win.zip` completely. Open `fleshfetch/fleshfetch.exe`.
 Keep `assets` and `runtime` beside it. Python, GTK and MSYS2 are not required.
 The source build uses Nuitka standalone, not a self-extracting onefile bundle.
 
@@ -24,6 +25,22 @@ Test opening the extracted ZIP on another PC too, especially an older processor.
 If startup fails, check `test-profile\fleshfetch\startup.log` or the normal
 profile's `startup.log`. A successful build on the developer PC is not proof of
 compatibility with every other CPU or machine.
+
+## Debian 13
+
+Download the Debian package into Downloads and run:
+
+```bash
+cd ~/Downloads
+sudo apt update
+sudo apt install ./fleshfetch_1.4.0-1_all.deb
+fleshfetch
+```
+
+If your account cannot use sudo, run `su -`, change to your Downloads folder
+with its full path, and run the apt commands without sudo. Launch the game
+as your normal user, not root. The package uses Debian's Python and Qt libraries.
+Player data stays in `~/.config/fleshfetch` unless XDG_CONFIG_HOME is set.
 
 ## Arch Linux / WSL
 
