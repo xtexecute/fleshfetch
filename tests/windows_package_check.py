@@ -1,5 +1,6 @@
 """Launch an extracted Windows ZIP with a clean PATH and isolated player data."""
 
+import argparse
 import ctypes
 from ctypes import wintypes
 import json
@@ -68,9 +69,13 @@ def own_window(pids):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--archive', type=Path,
+                        default=ROOT / 'output' / 'ff_v1.4.0_win.zip')
+    args = parser.parse_args()
     from PySide6.QtGui import QGuiApplication
     app = QGuiApplication([])
-    archive = ROOT / "output" / "ff_v1.4.0-rc2_win.zip"
+    archive = args.archive.resolve()
     test_root = ROOT / ".qt-test-data"
     test_root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=test_root) as temp:
