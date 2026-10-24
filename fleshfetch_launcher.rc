@@ -13,7 +13,7 @@ BEGIN
       VALUE "FileDescription", "Fleshfetch"
       VALUE "FileVersion", "1.4.0"
       VALUE "ProductName", "Fleshfetch"
-      VALUE "ProductVersion", "1.4.0-rc1"
+      VALUE "ProductVersion", "1.4.0"
     END
   END
   BLOCK "VarFileInfo"
