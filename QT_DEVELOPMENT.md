@@ -1,6 +1,6 @@
 # Qt Development Build
 
-Qt Quick is the default frontend in the published 1.4 release candidates.
+Qt Quick is the default frontend in Fleshfetch 1.4.
 The optional GTK frontend remains available from source through `--gtk`;
 it is not included in the Windows Qt package.
 
@@ -73,5 +73,5 @@ player data, exercises controls, drawing, input and reload, and optionally smoke
 tests the locally installed older mods. It never opens a multiplayer connection.
 
 Player data uses the existing Fleshfetch configuration folder. Back up saves
-before trying a release candidate; do not run it alongside another version
+before upgrading; do not run it alongside another version
 against the same data. Tests use isolated temporary configuration folders.
