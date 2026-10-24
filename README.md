@@ -19,6 +19,8 @@ Changes move from `bleeding-edge` to `experimental`, then from `experimental` to
 ## Run
 Run `python main.py` for the default Qt frontend. Dependencies and Windows/
 Arch testing instructions are in [TESTING_1.4.md](TESTING_1.4.md).
+Debian 13: install the release `.deb` with `sudo apt install ./fleshfetch_1.4.0-1_all.deb`,
+then run `fleshfetch`. Apt installs the required Python and Qt packages.
 The optional GTK frontend is available from source with `python main.py --gtk`
 and requires the original GTK dependencies. It is not bundled in the Windows Qt build.
 
