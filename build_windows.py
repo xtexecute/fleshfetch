@@ -1,4 +1,4 @@
-"""Build a portable Qt/Nuitka Windows release candidate."""
+"""Build a portable Qt/Nuitka Windows release."""
 
 import argparse
 import os
@@ -17,11 +17,15 @@ def main():
     parser.add_argument("--zig", type=Path, required=True)
     parser.add_argument("--package-only", action="store_true")
     parser.add_argument("--recompile-c-only", action="store_true")
+    parser.add_argument("--release-version", default="1.4.0")
     args = parser.parse_args()
     zig = args.zig.resolve()
     env = os.environ.copy()
     env["PATH"] = str(zig.parent) + os.pathsep + env["PATH"]
-    env["CCFLAGS"] = "-march=x86_64 -mno-avx -mno-avx2 -mno-fma -mno-bmi -mno-bmi2"
+    cpu_flags = "-target x86_64-windows-gnu -march=x86_64 -mno-avx -mno-avx2 -mno-avx512f -mno-fma -mno-bmi -mno-bmi2"
+    env["CCFLAGS"] = cpu_flags
+    # Zig builds compiler-runtime helpers during linking as well as C compilation.
+    env["LDFLAGS"] = cpu_flags
     env["NUITKA_CACHE_DIR"] = str(ROOT / ".build" / "cache")
     env["ZIG_GLOBAL_CACHE_DIR"] = str(ROOT / ".build" / "zig-global")
     env["ZIG_LOCAL_CACHE_DIR"] = str(ROOT / ".build" / "zig-local")
@@ -46,7 +50,7 @@ def main():
     if not (dist / "PySide6" / "QtCore.pyd").is_file():
         from restore_nuitka_payload import restore
         restore()
-    release = ROOT / "output" / "fleshfetch-1.4.0-rc2-windows" / "fleshfetch"
+    release = ROOT / "output" / f"fleshfetch-{args.release_version}-windows" / "fleshfetch"
     if release.exists():
         raise FileExistsError(f"Release folder already exists: {release}")
     shutil.copytree(dist, release / "runtime")
@@ -74,7 +78,7 @@ def main():
                     target = release / "runtime" / "licenses" / name / item.name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
-    archive = ROOT / "output" / "ff_v1.4.0-rc2_win.zip"
+    archive = ROOT / "output" / f"ff_v{args.release_version}_win.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as package:
         for path in sorted(release.rglob("*")):
             if path.is_file() and path.suffix.lower() != ".pdb":
