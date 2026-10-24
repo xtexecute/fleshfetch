@@ -1,0 +1,5 @@
+{
+  "name": "Legacy Compatibility Test",
+  "version": "1.0.0",
+  "description": "Exercises old GTK controls, callbacks, timers, drawing, and deprecated game APIs."
+}

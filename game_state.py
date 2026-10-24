@@ -1,6 +1,6 @@
 import random
 
-from gtk_compat import GLib
+import runtime_scheduler as GLib
 
 
 class GameStateMixin:

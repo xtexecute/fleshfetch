@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import importlib.machinery
 import importlib.util
 import json
 import os
 
-from gtk_compat import GLib
+import runtime_scheduler as GLib
 
 from defaults import BASE_CURRENCIES, BASE_UPGRADES, DEFAULT_ACHIEVEMENTS
 from mod_api import (

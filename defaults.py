@@ -1,4 +1,5 @@
 DEFAULT_SETTINGS = {
+    "theme": "system",
     "enable_rpc": False,
     "squish_ms": 100,
     "play_click_sound": False,

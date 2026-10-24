@@ -3,7 +3,7 @@ import json
 import os
 import time
 
-from gtk_compat import GLib
+import runtime_scheduler as GLib
 
 from defaults import DEFAULT_ACHIEVEMENTS, DEFAULT_SETTINGS, DEFAULT_STATE
 from paths import (

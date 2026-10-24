@@ -9,6 +9,9 @@ from paths import ensure_app_dirs
 def _parse_args(argv):
     parser = argparse.ArgumentParser(description="Fleshfetch")
     parser.add_argument(
+        "--gtk", action="store_true", help="use the legacy GTK frontend"
+    )
+    parser.add_argument(
         "-I",
         "--info",
         action="store_true",
@@ -24,7 +27,10 @@ def main(argv=None):
         from info_tui import run_info_tui
 
         return run_info_tui()
-    from ui import main as run_game
+    if args.gtk:
+        from ui import main as run_game
+    else:
+        from qt_frontend import main as run_game
 
     return run_game()
 

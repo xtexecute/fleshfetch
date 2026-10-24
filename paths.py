@@ -5,7 +5,7 @@ from bootstrap import CONFIG_DIR
 
 # ---------- PATHS ----------
 if getattr(sys, "frozen", False):
-    BASE_DIR = sys._MEIPASS
+    BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     # When frozen, user-replaceable assets live beside the executable.
     EXE_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:

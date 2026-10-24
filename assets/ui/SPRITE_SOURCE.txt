@@ -1,0 +1,16 @@
+Asset: red-frame.png
+Generated using the built-in image generation tool.
+
+Original prompt:
+Production game UI sprite asset, a single empty pixel-art rectangular frame
+for Fleshfetch. Red stepped double border, crisp hard pixel edges, restrained
+16-bit PC game UI. Completely transparent center and exterior. No text,
+symbols, illustration, gradients or glow. Symmetric straight repeatable edges
+for nine-slicing into buttons, tabs and a window frame.
+
+Final color edit:
+Recolor only the pixel-art frame. Medium red, dominant #cd515c, shadow #85333e,
+highlight #e77e83. Darker and more saturated than pale pink, without deep
+crimson. Preserve frame geometry, stepped corners and transparency.
+
+Interiors are drawn by the theme system, not baked into the sprite.
