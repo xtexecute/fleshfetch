@@ -1,7 +1,7 @@
 # Fleshfetch
 
 A Qt-based modding framework and clicker engine(?) written in Python. <br>
-This repository contains the core modding API, alongside **Mod #1 (The Base Game)** which serves as the game you see when installed. You can mod the game pretty easily. <br>
+This repo contains the core modding API, alongside **Mod #1 (The Base Game)** which serves as the game you see when installed. You can mod the game pretty easily. <br>
 I used to say this is a joke here, but I really am not sure anymore.
 
 This game is **IN DEVELOPMENT**
@@ -10,25 +10,19 @@ PLEASE WRITE ALL BUGS IN ISSUES
 
 ## Branches
 
-- [`main`](https://github.com/xtexecute/fleshfetch/tree/main): Stable releases.
-- [`experimental`](https://github.com/xtexecute/fleshfetch/tree/experimental): Changes that have passed basic testing and are ready for wider testing.
-- [`bleeding-edge`](https://github.com/xtexecute/fleshfetch/tree/bleeding-edge): The newest available code. Every in-progress change may be committed here, so it may be incomplete, broken, or unable to launch.
+- [`main`](https://github.com/xtexecute/fleshfetch/tree/main): Main.
+- [`experimental`](https://github.com/xtexecute/fleshfetch/tree/experimental): Passes basic testing, might be buggy but almost always has release candidates and new stuff and has a much lower chance of corrupting your data. Still not zero. Oh, and I don't have playtesters so don't expect this to be super great.
+- [`bleeding-edge`](https://github.com/xtexecute/fleshfetch/tree/bleeding-edge): It's on the label bro, things here might and will be buggy, may crash, may corrupt your saves and such and there will not be releases here
 
-Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Experimental builds are published as prereleases. Use the experimental bug report form for experimental and bleeding-edge builds.
+Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Use the experimental bug report form for experimental and bleeding edge please 
 
 ## Run
-Run `python main.py` for the default Qt frontend. Dependencies and Windows/
+Run `python main.py` for the game
 Arch testing instructions are in [TESTING_1.4.md](TESTING_1.4.md).
-Debian 13: install the release `.deb` with `sudo apt install ./fleshfetch_1.4.0-1_all.deb`,
-then run `fleshfetch`. Apt installs the required Python and Qt packages.
-The optional GTK frontend is available from source with `python main.py --gtk`
-and requires the original GTK dependencies. It is not bundled in the Windows Qt build.
+Debian 13: install the release `.deb` then run `fleshfetch`.
 
 Arch Linux command: `fleshfetch`
-
-Run `fleshfetch -I` or `fleshfetch --info` to open the read-only terminal
-browser for saves, stats, upgrades, and installed mods. Use the arrow keys to
-navigate, Enter to open an item, and Ctrl+X to exit.
+h`h`
  
 Windows: run fleshfetch.exe from the .zip
 
