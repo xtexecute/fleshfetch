@@ -24,7 +24,7 @@ Arch Linux command: `fleshfetch`
  
 Windows: run fleshfetch.exe from the .zip
 
-### Attribution
+## Attribution
 
 Fleshfetch is open-source software licensed under the MIT License.
 
