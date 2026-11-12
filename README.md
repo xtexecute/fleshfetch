@@ -18,7 +18,6 @@ Changes move from `bleeding-edge` to `experimental`, then from `experimental` to
 
 ## Run
 Run `python main.py` for the game
-Arch testing instructions are in [TESTING_1.4.md](TESTING_1.4.md).
 Debian 13: install the release `.deb` then run `fleshfetch`.
 
 Arch Linux command: `fleshfetch`
