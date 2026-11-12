@@ -32,7 +32,7 @@ If you modify, fork, or redistribute Fleshfetch, please keep the original copyri
 
 I would appreciate it if you credited **xtexecute** as the original creator and linked back to the original Fleshfetch repository.
 
-You are welcome to modify and build upon the project (see license)
+You are welcome to modify and build upon the project <sup>[[see license]](https://github.com/xtexecute/fleshfetch/blob/main/LICENSE)</sup>
 
 <br><br><br><br><br><br>
 
