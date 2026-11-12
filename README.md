@@ -30,7 +30,7 @@ Fleshfetch is open-source software licensed under the MIT License.
 
 If you modify, fork, or redistribute Fleshfetch, please keep the original copyright and license notices as required by the MIT License.
 
-I'd also appreciate it if you credited **xtexecute** as the original creator and linked back to the original Fleshfetch repository.
+I would appreciate it if you credited **xtexecute** as the original creator and linked back to the original Fleshfetch repository.
 
 You are welcome to modify and build upon the project (see license)
 
