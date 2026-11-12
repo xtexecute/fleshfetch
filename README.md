@@ -12,7 +12,7 @@ PLEASE WRITE ALL BUGS IN ISSUES
 
 - [`main`](https://github.com/xtexecute/fleshfetch/tree/main): Main.
 - [`experimental`](https://github.com/xtexecute/fleshfetch/tree/experimental): Passes basic testing, might be buggy but almost always has release candidates and new stuff and has a much lower chance of corrupting your data. Still not zero. Oh, and I don't have playtesters so don't expect this to be super great.
-- [`bleeding-edge`](https://github.com/xtexecute/fleshfetch/tree/bleeding-edge): It's on the label bro, things here might and will be buggy, may crash, may corrupt your saves and such and there will not be releases here
+- [`bleeding-edge`](https://github.com/xtexecute/fleshfetch/tree/bleeding-edge): It's on the label, things here might and will be buggy, may crash, may corrupt your saves and such and there will not be releases here
 
 Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Use the experimental bug report form for experimental and bleeding edge please 
 
@@ -23,6 +23,16 @@ Debian 13: install the release `.deb` then run `fleshfetch`.
 Arch Linux command: `fleshfetch`
  
 Windows: run fleshfetch.exe from the .zip
+
+### Attribution
+
+Fleshfetch is open-source software licensed under the MIT License.
+
+If you modify, fork, or redistribute Fleshfetch, please keep the original copyright and license notices as required by the MIT License.
+
+I'd also appreciate it if you credited **xtexecute** as the original creator and linked back to the original Fleshfetch repository.
+
+You are welcome to modify and build upon the project (see license)
 
 <br><br><br><br><br><br>
 
