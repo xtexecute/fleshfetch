@@ -21,7 +21,6 @@ Run `python main.py` for the game
 Debian 13: install the release `.deb` then run `fleshfetch`.
 
 Arch Linux command: `fleshfetch`
-h`h`
  
 Windows: run fleshfetch.exe from the .zip
 
