@@ -37,6 +37,7 @@ import os
 import re
 import base64
 import json
+import threading
 from pathlib import Path
 
 
@@ -241,6 +242,7 @@ class ImageHandle(_Handle):
         self.x, self.y = float(x), float(y)
         self.vx = self.vy = self.rotation = 0.0
         self._manual_motion = False
+        self.draggable = False
         self.opacity = 1.0
         self.tab_id, self.tooltip = tab_id, str(tooltip or "")
         self.visible, self.fit, self.expand = bool(visible), str(fit), bool(expand)
@@ -335,6 +337,10 @@ class ImageHandle(_Handle):
     def get_velocity(self):
         return self.vx, self.vy
 
+    def set_draggable(self, enabled=True):
+        self.draggable = bool(enabled)
+        return self._changed()
+
     def step(self, seconds=1.0):
         self._manual_motion = True
         return self.move_by(self.vx * float(seconds), self.vy * float(seconds))
@@ -412,7 +418,7 @@ class ImageHandle(_Handle):
         return dict(self._snapshot(), kind=self.kind, tab_id=self.tab_id,
                     source=_file_uri(self.image_path), x=self.x, y=self.y,
                     width=self.width, height=self.height, rotation=self.rotation,
-                    opacity=self.opacity, vx=self.vx, vy=self.vy,
+                    opacity=self.opacity, vx=self.vx, vy=self.vy, draggable=self.draggable,
                     tooltip=self.tooltip, fit=self.fit, expand=self.expand)
 
 
@@ -424,9 +430,77 @@ class SpriteHandle(ImageHandle):
         return self.id
 
 
+class SurfaceHandle(_Handle):
+    """RGBA frame sink with input callbacks; frame bytes stay out of snapshots."""
+
+    def __init__(self, game, surface_id, tab_id, owner, width, height, on_key, on_pointer):
+        super().__init__(game, surface_id, owner)
+        self.tab_id, self.width, self.height = tab_id, width, height
+        self.on_key, self.on_pointer = on_key, on_pointer
+        self.revision = 0
+        self._frame = b""
+        self._frame_lock = threading.Lock()
+
+    def set_frame(self, rgba):
+        if self._removed:
+            return False
+        frame = bytes(rgba)
+        if len(frame) != self.width * self.height * 4:
+            raise ValueError("Surface frame must contain width * height * 4 RGBA bytes")
+        with self._frame_lock:
+            if self._removed:
+                return False
+            self._frame = frame
+            self.revision += 1
+            revision = self.revision
+        notify = getattr(self.game, "_surface_frame_changed", None)
+        if notify is not None:
+            notify(self.id, revision)
+        return True
+
+    def frame_snapshot(self):
+        with self._frame_lock:
+            return self._frame
+
+    def key_event(self, key, pressed, modifiers=0):
+        if self._removed or not self.visible or self.on_key is None:
+            return False
+        self.game._run_with_mod_owner(self.owner, self.on_key,
+                                      {"key": int(key), "pressed": bool(pressed),
+                                       "modifiers": int(modifiers)})
+        return True
+
+    def pointer_event(self, kind, x, y, button=0, buttons=0):
+        if self._removed or not self.visible or self.on_pointer is None:
+            return False
+        if kind not in ("press", "release", "move"):
+            raise ValueError("Unknown surface pointer event")
+        self.game._run_with_mod_owner(self.owner, self.on_pointer,
+                                      {"kind": kind, "x": max(0, min(self.width - 1, int(x))),
+                                       "y": max(0, min(self.height - 1, int(y))),
+                                       "button": int(button), "buttons": int(buttons)})
+        return True
+
+    def remove(self):
+        if self._removed:
+            return False
+        with self._frame_lock:
+            self._removed = True
+            self._frame = b""
+        self.on_key = self.on_pointer = None
+        self.game._qt_surfaces.pop(self.id, None)
+        self.game._forget_qt_item(self)
+        self.game._notify_catalog()
+        return True
+
+    def to_dict(self):
+        return dict(self._snapshot(), tab_id=self.tab_id, width=self.width,
+                    height=self.height, revision=self.revision)
+
+
 class QtModUiMixin:
     def init_qt_mod_ui(self):
-        self._qt_tabs, self._qt_buttons, self._qt_images = {}, {}, {}
+        self._qt_tabs, self._qt_buttons, self._qt_images, self._qt_surfaces = {}, {}, {}, {}
         self._qt_next_id = 1
         self._qt_view_width = self._qt_view_height = 0
         self._tab_pages, self._mod_tab_owners = {}, {}
@@ -490,6 +564,8 @@ class QtModUiMixin:
                 "Qt add_tab() cannot accept a GTK page_box; omit page_box and use "
                 "the returned TabHandle.add_label() / add_button() methods")
         tab_id = str(tab_id)
+        if tab_id in getattr(self, "_builtin_tab_ids", ()):
+            raise ValueError(f"Tab '{tab_id}' is built in; use add_tab_button() to add controls")
         if tab_id in self._qt_tabs:
             raise ValueError(f"Tab '{tab_id}' already exists")
         owner = self._current_mod_namespace()
@@ -559,7 +635,7 @@ class QtModUiMixin:
         if tab is not None:
             tab._removed = True
             tab._items.clear()
-        for handle in list(self._qt_buttons.values()) + list(self._qt_images.values()):
+        for handle in list(self._qt_buttons.values()) + list(self._qt_images.values()) + list(self._qt_surfaces.values()):
             if handle.tab_id == tab_id:
                 handle.remove()
         self._qt_items.pop(tab_id, None)
@@ -605,6 +681,8 @@ class QtModUiMixin:
         return number(x), number(y)
 
     def resolve_asset_path(self, path: str, owner=None) -> str:
+        if owner is None:
+            owner = self._current_mod_namespace()
         raw = str(path or "").strip()
         if not raw:
             return raw
@@ -644,12 +722,45 @@ class QtModUiMixin:
         self._notify_catalog()
         return image
 
+    def create_surface(self, tab_id: str, width: int, height: int, on_key=None, on_pointer=None):
+        """Add an RGBA video/input surface to a mod tab (Qt frontend only)."""
+        if str(tab_id) not in self._qt_tabs:
+            raise ValueError("Create a mod tab before adding a surface")
+        if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+            raise ValueError("Surface dimensions must be positive integers")
+        if width * height * 4 > 16 * 1024 * 1024:
+            raise ValueError("Surface frame exceeds the 16 MiB limit")
+        if on_key is not None and not callable(on_key):
+            raise TypeError("on_key must be callable")
+        if on_pointer is not None and not callable(on_pointer):
+            raise TypeError("on_pointer must be callable")
+        owner = self._current_mod_namespace()
+        surface = SurfaceHandle(self, self._qt_id("surface", owner), str(tab_id), owner,
+                                width, height, on_key, on_pointer)
+        self._qt_surfaces[surface.id] = surface
+        self._remember_qt_item(surface, "surface")
+        self._notify_catalog()
+        return surface
+
+    def get_surface(self, surface_id):
+        return self._qt_surfaces.get(str(surface_id))
+
+    def surface_key_event(self, surface_id, key, pressed, modifiers=0):
+        surface = self.get_surface(surface_id)
+        return surface.key_event(key, pressed, modifiers) if surface is not None else False
+
+    def surface_pointer_event(self, surface_id, kind, x, y, button=0, buttons=0):
+        surface = self.get_surface(surface_id)
+        return surface.pointer_event(kind, x, y, button, buttons) if surface is not None else False
+
     def create_image(self, image_path: str, size=(100, 100), pos=(0, 0), tab_id=None,
                      width=None, height=None, x=None, y=None, tooltip=None,
                      visible=True, fit="contain", layer="window"):
         if tab_id is not None:
-            return self.add_image(tab_id, image_path, size=size, width=width, height=height,
-                                  tooltip=tooltip, fit=fit)
+            image = self.add_image(tab_id, image_path, size=size, width=width, height=height,
+                                   tooltip=tooltip, fit=fit)
+            image.set_visible(visible)
+            return image
         owner = self._current_mod_namespace()
         width, height = self._normalize_image_size(size, width, height)
         x, y = self._normalize_position(pos, x, y)
@@ -711,7 +822,8 @@ class QtModUiMixin:
     def qt_mod_ui_snapshot(self):
         return {"tabs": [tab.to_dict() for tab in self._qt_tabs.values()],
                 "buttons": [button.to_dict() for button in self._qt_buttons.values()],
-                "images": [image.to_dict() for image in self._qt_images.values()]}
+                "images": [image.to_dict() for image in self._qt_images.values()],
+                "surfaces": [surface.to_dict() for surface in self._qt_surfaces.values()]}
 
     def set_flesh_image(self, path: str):
         self.flesh_image_path = self.resolve_asset_path(path, owner=self._current_mod_namespace())

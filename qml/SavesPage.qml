@@ -51,7 +51,16 @@ ColumnLayout {
                     Text { text: save.modelData.name; color: page.theme.text; font.pixelSize: 16; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     Text { text: save.modelData.active ? "ACTIVE" : ""; color: page.theme.dark ? page.theme.accentHover : page.theme.focus; font.family: page.theme.mono; font.pixelSize: 12 }
                 }
-                Text { text: (save.modelData.kind || "Save") + "  \u00b7  " + (save.modelData.updated || ""); color: page.theme.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Text {
+                    objectName: "saveDetails"
+                    text: [save.modelData.kind === "singleplayer" ? "" : save.modelData.kind,
+                           save.modelData.updated].filter(Boolean).join("  \u00b7  ")
+                    visible: text.length > 0
+                    color: page.theme.muted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
                 Text {
                     text: "Required mods: " + (save.modelData.requiredMods || []).join(", ")
                     visible: (save.modelData.requiredMods || []).length > 0

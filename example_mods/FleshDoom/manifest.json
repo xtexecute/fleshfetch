@@ -1,0 +1,6 @@
+{
+  "name": "FleshDoom",
+  "version": "0.1.0",
+  "description": "Play DOOM inside fleshfetch with a PrBoom libretro core.",
+  "author": "xtexecute"
+}

@@ -1,5 +1,33 @@
 """Toolkit-free gameplay actions shared by frontends."""
 
+from collections import deque
+import time
+
+from mod_api import vanilla_enabled
+
+
+def accept_manual_click(game, now=None):
+    """Throttle rewarded clicks after sustained implausible input speed."""
+    now = time.monotonic() if now is None else now
+    attempts = getattr(game, "_click_attempts", None)
+    if attempts is None:
+        attempts = game._click_attempts = deque(maxlen=64)
+    while attempts and now - attempts[0] > 1.0:
+        attempts.popleft()
+    attempts.append(now)
+
+    capped_until = getattr(game, "_click_rate_capped_until", 0.0)
+    implausible = len(attempts) >= 25 or (len(attempts) >= 16 and now - attempts[0] >= 0.5)
+    if implausible:
+        if now >= capped_until and hasattr(game, "_set_status"):
+            game._set_status("Click speed limited to 7 per second.")
+        capped_until = game._click_rate_capped_until = now + 10.0
+
+    if now < capped_until and now - getattr(game, "_last_rewarded_click_at", float("-inf")) < 1.0 / 7.0:
+        return False
+    game._last_rewarded_click_at = now
+    return True
+
 
 class GameplayCoreMixin:
     """Combine with the state/mod/save APIs and frontend hooks.
@@ -65,10 +93,16 @@ class GameplayCoreMixin:
         return False
 
     def on_timer_tick(self):
+        if hasattr(self, "advance_streak"):
+            self.advance_streak()
         for reg_name in self.currencies:
             cps = self.compute_cps(reg_name)
             if cps > 0:
                 self.add_currency(reg_name, cps)
+                if reg_name == "flesh" and hasattr(self, "record_flesh_earned"):
+                    self.record_flesh_earned(cps)
+        if hasattr(self, "expire_boosts"):
+            self.expire_boosts()
         self.update_labels()
         return True
 
@@ -104,6 +138,8 @@ class GameplayCoreMixin:
         total = self.total_upgrades_owned()
         if total >= 1: self.unlock_achievement("first_upgrade")
         if total >= 5: self.unlock_achievement("five_upgrades")
+        from vanilla_shop import check_shop_achievements
+        check_shop_achievements(self)
 
         # Update cost labels and visibility in-place -- no rebuild, no scroll jump
         self._apply_upgrade_visibility()
@@ -111,16 +147,18 @@ class GameplayCoreMixin:
         return True
 
     def on_click(self, gesture, n_press, x, y):
+        if not vanilla_enabled(self, "clicker") or not accept_manual_click(self):
+            self._last_click_gains = {}
+            self._last_click_critical = False
+            return False
+        if hasattr(self, "register_streak_click"):
+            self.register_streak_click()
         self.play_squish()
         self.play_click_sound()
 
-        # primary currency uses base fpc + upgrade cpc; others use only upgrade cpc
         base_gains = {}
         for reg_name in self.currencies:
-            if reg_name == self.primary_currency:
-                gain = self.effective_fpc()
-            else:
-                gain = self.compute_cpc(reg_name)
+            gain = self.compute_click_gain(reg_name)
             if gain:
                 base_gains[reg_name] = gain
 
@@ -138,11 +176,21 @@ class GameplayCoreMixin:
             if modifier_event.get("key") == "__global__:critical_clicks":
                 crit_multiplier *= self._coerce_modifier_number(modifier_event.get("multiplier"), 1.0)
 
+        self._last_click_gains = dict(gains)
+        self._last_click_critical = crit_multiplier > 1.0
+
         for reg_name, gain in gains.items():
             if gain:
                 self.add_currency(reg_name, gain)
+                if reg_name == "flesh" and hasattr(self, "record_flesh_earned"):
+                    self.record_flesh_earned(gain)
+
+        if hasattr(self, "maybe_drop_crate"):
+            self.maybe_drop_crate()
 
         self.state["total_clicks"] = next_total_clicks
+        if hasattr(self, "_skin_clicked"):
+            self._skin_clicked({"x": x, "y": y, "gains": dict(gains), "total_clicks": next_total_clicks})
         self._emit_event("flesh_clicked", {
             "x": x,
             "y": y,
@@ -165,6 +213,7 @@ class GameplayCoreMixin:
         if self.flesh >= 1000: self.unlock_achievement("thousand_flesh")
 
         self.update_labels()
+        return True
 
     def unlock_achievement(self, key: str):
         if key not in self.achievements:

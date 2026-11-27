@@ -7,7 +7,7 @@ Item {
     id: chrome
     required property var theme
     required property var window
-    property string title: "Fleshfetch"
+    property string title: "fleshfetch"
     implicitHeight: 46
     Rectangle { anchors.fill: parent; color: chrome.theme.surface }
     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: chrome.theme.line }

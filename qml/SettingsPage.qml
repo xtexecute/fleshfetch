@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 ScrollView {
     id: page
+    objectName: "settingsPage"
     required property var theme
     property var preferences: game.preferences
     clip: true
@@ -29,6 +30,10 @@ ScrollView {
             }
             Text { text: "Click sound"; color: page.theme.text; font.pixelSize: 14; Layout.fillWidth: true; wrapMode: Text.Wrap }
             Switch { checked: page.preferences.play_click_sound === true; Accessible.name: "Click sound"; onClicked: game.setPreference("play_click_sound", checked) }
+            Text { text: "Button sounds"; color: page.theme.text; font.pixelSize: 14; Layout.fillWidth: true }
+            Switch { checked: page.preferences.play_ui_sounds !== false; Accessible.name: "Button sounds"; onClicked: game.setPreference("play_ui_sounds", checked) }
+            Text { text: "Game effects"; color: page.theme.text; font.pixelSize: 14; Layout.fillWidth: true }
+            Switch { checked: page.preferences.play_effect_sounds !== false; Accessible.name: "Game effects"; onClicked: game.setPreference("play_effect_sounds", checked) }
             Text { text: "Volume"; color: page.theme.text; font.pixelSize: 14; Layout.fillWidth: true }
             RowLayout {
                 Layout.preferredWidth: 180
@@ -43,6 +48,62 @@ ScrollView {
             Switch { checked: page.preferences.auto_reload_mod_changes === true; Accessible.name: "Auto reload mod changes"; onClicked: game.setPreference("auto_reload_mod_changes", checked) }
         }
         Rectangle { Layout.fillWidth: true; Layout.topMargin: 6; height: 1; color: page.theme.line }
+        Repeater {
+            model: game.live.modSettings || []
+            delegate: RowLayout {
+                id: settingRow
+                required property var modelData
+                Layout.fillWidth: true
+                spacing: 12
+                Text {
+                    text: settingRow.modelData.name
+                    color: page.theme.text
+                    font.pixelSize: 14
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    ToolTip.visible: settingHover.hovered
+                    ToolTip.text: settingRow.modelData.owner
+                    HoverHandler { id: settingHover }
+                }
+                Loader {
+                    Layout.preferredWidth: 180
+                    sourceComponent: settingRow.modelData.kind === "bool" ? booleanSetting
+                        : settingRow.modelData.kind === "choice" ? choiceSetting : numberSetting
+                    Component {
+                        id: booleanSetting
+                        Switch {
+                            checked: settingRow.modelData.value === true
+                            Accessible.name: settingRow.modelData.name
+                            onClicked: game.setRegisteredModSetting(settingRow.modelData.id, checked)
+                        }
+                    }
+                    Component {
+                        id: choiceSetting
+                        ComboBox {
+                            model: settingRow.modelData.choices
+                            currentIndex: model.indexOf(settingRow.modelData.value)
+                            Accessible.name: settingRow.modelData.name
+                            onActivated: game.setRegisteredModSetting(settingRow.modelData.id, model[currentIndex])
+                        }
+                    }
+                    Component {
+                        id: numberSetting
+                        ColumnLayout {
+                            Slider {
+                                Layout.fillWidth: true
+                                from: settingRow.modelData.minimum
+                                to: settingRow.modelData.maximum
+                                stepSize: settingRow.modelData.step
+                                value: settingRow.modelData.value
+                                Accessible.name: settingRow.modelData.name
+                                onMoved: game.setRegisteredModSetting(settingRow.modelData.id, value)
+                            }
+                            Text { text: Number(settingRow.modelData.value.toFixed(4)); color: page.theme.muted; font.pixelSize: 12 }
+                        }
+                    }
+                }
+            }
+        }
         RowLayout {
             Layout.fillWidth: true
             SectionTitle { theme: page.theme; text: "Installed mods"; Layout.fillWidth: true }

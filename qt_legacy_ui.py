@@ -345,7 +345,7 @@ class LegacyDialog(LegacyNode):
 
     def present(self):
         dialog = QMessageBox()
-        dialog.setWindowTitle(self.props.get("title", "Fleshfetch"))
+        dialog.setWindowTitle(self.props.get("title", "fleshfetch"))
         dialog.setText("\n".join(c.get_text() for c in self.content.children))
         responses = {}
         for text, response in self.responses:
@@ -555,10 +555,10 @@ class LegacyUiMixin:
         return glib
 
     def add_tab(self, tab_id, label, page_box=None):
+        if page_box is not None and not isinstance(page_box, LegacyNode):
+            raise TypeError("page_box must be a legacy compatibility container")
         tab = super().add_tab(tab_id, label)
         if page_box is not None:
-            if not isinstance(page_box, LegacyNode):
-                raise TypeError("page_box must be a legacy compatibility container")
             self._legacy_pages[str(tab_id)] = page_box
             self._notify_catalog()
             return page_box

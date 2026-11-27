@@ -5,34 +5,45 @@ import base64
 import json
 import html
 from pathlib import Path
+import random
 import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, Property, QSize, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter
+from PySide6.QtCore import QObject, QPointF, Property, QSize, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QImage, QLinearGradient, QPainter
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from console_commands import ConsoleCommandsMixin
+from click_audio import pitch_variant_paths
 from core_runtime import initialize_runtime
 from defaults import DEFAULT_SETTINGS
 from game_state import GameStateMixin
+from progression import ProgressionMixin, StreakMixin, COSMETICS, TESTABLE_COSMETICS, CRATE_TIERS, GEAR, POTIONS
 from gameplay_core import GameplayCoreMixin
-from mod_api import ModApiMixin
+from mod_api import ModApiMixin, VANILLA_PARTS, vanilla_enabled
 from mod_manager import ModManagerMixin
 from paths import SETTINGS_FILE, ensure_app_dirs, find_app_asset
 from qt_mod_ui import QtModUiMixin
 from qt_legacy_ui import LegacyUiMixin
 from qt_sprite_model import SpriteModel
 from qt_leaderboard import LeaderboardController
-from rpc import RpcMixin
+from vanilla_shop import equipment_catalog, equipment_progress, workshop_state
+from rpc import ThreadedRpcMixin
 import runtime_scheduler as scheduler
 from save_manager import (
     SaveManagerMixin, backup_save_slot, clone_json_data, list_save_slots,
-    load_save_slot_data, save_json,
+    load_save_slot_data, save_json, write_save_slot_data,
 )
+
+CAST_FLESH_ASSETS = {
+    "gold": "skins/cast-gold.png",
+    "liquid_metal": "skins/liquid-metal.png",
+    "stained_glass": "skins/stained-glass.png",
+    "opal": "skins/opal.png",
+}
 
 
 class _ConsoleStream:
@@ -65,8 +76,223 @@ class SkinImages(QQuickImageProvider):
             raise RuntimeError("Missing UI sprite: assets/ui/red-frame.png")
         self.frame = source.scaled(64, 64, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
         self.tinted_frames = {}
+        self.tinted_flesh = {}
+        self.clockwork_images = {}
+        self.loot_atlas = QImage(find_app_asset("loot/loot-pixel.png"))
+        self.hat = QImage(find_app_asset("loot/top-hat.png"))
+        atlas = QImage(find_app_asset("shop/equipment-pixel.png"))
+        self.equipment = []
+        if not atlas.isNull():
+            for index in range(8):
+                x, y = index % 4, index // 4
+                left, top = x * atlas.width() // 4, y * atlas.height() // 2
+                right, bottom = (x + 1) * atlas.width() // 4, (y + 1) * atlas.height() // 2
+                self.equipment.append(atlas.copy(left, top, right - left, bottom - top))
+
+    @staticmethod
+    def _shadow_image(image):
+        if max(image.width(), image.height()) > 512:
+            image = image.scaled(512, 512, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+        rim = image.copy()
+        core = image.copy()
+        inset = max(2, round(min(image.width(), image.height()) * 0.012))
+        painter = QPainter(core)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        for dx, dy in ((inset, 0), (-inset, 0), (0, inset), (0, -inset)):
+            painter.drawImage(dx, dy, image)
+        painter.end()
+        for target, high, low in ((rim, "#b29ac8", "#6d5083"), (core, "#584468", "#252031")):
+            shade = QLinearGradient(0, 0, target.width() * 0.28, target.height())
+            shade.setColorAt(0, QColor(high))
+            shade.setColorAt(1, QColor(low))
+            painter = QPainter(target)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(target.rect(), shade)
+            painter.end()
+        painter = QPainter(rim)
+        painter.drawImage(0, 0, core)
+        painter.end()
+        return rim
+
+    @staticmethod
+    def _echo_image(image):
+        if max(image.width(), image.height()) > 512:
+            image = image.scaled(512, 512, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+        echo = image.convertToFormat(QImage.Format.Format_Grayscale8).convertToFormat(
+            QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(echo)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+        painter.fillRect(echo.rect(), QColor("#a4f2e5"))
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
+        painter.fillRect(echo.rect(), QColor("#24514b"))
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        painter.drawImage(0, 0, image)
+        painter.end()
+        return echo
 
     def requestImage(self, image_id, size, requested_size):
+        if image_id.startswith("clockwork/"):
+            name = image_id.split("/", 1)[1]
+            if name not in {
+                "01-chassis", "02-housings", "04-front-brackets", "05-clock-face",
+                "clock-hour-hand", "clock-minute-hand", "clock-pivot", "preview",
+                "gear-left", "gear-left-pinion", "gear-idler-1", "gear-idler-2",
+                "gear-idler-3", "gear-idler-4", "gear-upper-right", "gear-lower-right",
+            }:
+                return QImage()
+            if name not in self.clockwork_images:
+                self.clockwork_images[name] = QImage(find_app_asset(f"skins/clockwork/{name}.png"))
+            art = self.clockwork_images[name]
+            size.setWidth(art.width())
+            size.setHeight(art.height())
+            return art
+        if image_id == "accessory/top_hat":
+            size.setWidth(self.hat.width())
+            size.setHeight(self.hat.height())
+            return self.hat
+        if image_id.startswith("preview/"):
+            cosmetic = image_id.split("/", 1)[1]
+            if cosmetic not in COSMETICS:
+                return QImage()
+            if cosmetic == "smoke":
+                art = QImage(128, 128, QImage.Format.Format_ARGB32)
+                art.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(art)
+                painter.setOpacity(0.4)
+                for frame, x, y in ((2, 14, 70), (4, 103, 42), (1, 72, 5)):
+                    painter.drawImage(x, y, QImage(find_app_asset(f"skins/smoke-puff-{frame}.png")))
+                painter.setOpacity(1)
+                painter.drawImage(8, 8, QImage(find_app_asset("flesh.png")).scaled(
+                    112, 112, Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+                painter.end()
+                size.setWidth(art.width())
+                size.setHeight(art.height())
+                return art
+            preview_asset = {
+                "cat": "skins/cat-closed.png",
+                "rose": "skins/rose-preview.png",
+                "sandcastle": "skins/sandcastle-preview.png",
+                "sundial": "skins/sundial-preview.png",
+                "prism_rain": "skins/prism-rain-preview.png",
+                "lightbox": "skins/lightbox-preview.png",
+                "firefly_jar": "skins/firefly-jar-preview.png",
+                "opal": "skins/opal-preview.png",
+                "event_horizon": "skins/event-horizon-preview.png",
+                "star_map": "skins/star-map-preview.png",
+                "aurora_ribbon": "skins/aurora-ribbon-preview.png",
+                "deep_blue": "skins/deep-blue-preview.png",
+                "tidal_planet": "skins/tidal-planet-preview.png",
+                "neon_outline": "skins/neon-outline-preview.png",
+                "snow_globe": "skins/snow-globe-preview.png",
+                "lava_lamp": "skins/lava-lamp-preview.png",
+                "marionette": "skins/marionette-preview.png",
+                "paper_crown": "skins/paper-crown.png", "price_tag": "skins/price-tag.png",
+                "sticky_note": "skins/sticky-note.png", "button_badge": "skins/button-badge.png",
+                "wind_up_key": "skins/wind-up-key.png", "party_hat": "skins/party-hat.png",
+                "sunglasses": "skins/sunglasses.png", "squeaky_toy": "skins/squeaky-toy.png",
+                "tiny_flag": "skins/tiny-flag-0.png",
+            }.get(cosmetic) or CAST_FLESH_ASSETS.get(cosmetic)
+            if preview_asset:
+                art = QImage(find_app_asset(preview_asset))
+                size.setWidth(art.width())
+                size.setHeight(art.height())
+                return art
+            path = base64.urlsafe_b64encode(find_app_asset("flesh.png").encode()).decode()
+            art = self.requestImage(f"flesh/{cosmetic}/{path}", size, requested_size).copy()
+            if cosmetic in ("shadow_twin", "temporal_echo") and not art.isNull():
+                preview = QImage(128, 128, QImage.Format.Format_ARGB32)
+                preview.fill(Qt.GlobalColor.transparent)
+                scaled = art.scaled(104, 104, Qt.AspectRatioMode.KeepAspectRatio,
+                                    Qt.TransformationMode.SmoothTransformation)
+                painter = QPainter(preview)
+                if cosmetic == "shadow_twin":
+                    painter.setOpacity(0.54)
+                    painter.drawImage(21, 20, scaled)
+                    painter.setOpacity(0.91)
+                    painter.drawImage(1, 5, scaled)
+                else:
+                    painter.setOpacity(0.69)
+                    painter.drawImage(22, 1, scaled)
+                painter.setOpacity(1)
+                flesh = QImage(find_app_asset("flesh.png")).scaled(104, 104, Qt.AspectRatioMode.KeepAspectRatio,
+                                                                 Qt.TransformationMode.SmoothTransformation)
+                painter.drawImage(12, 12, flesh)
+                painter.end()
+                size.setWidth(preview.width())
+                size.setHeight(preview.height())
+                return preview
+            return art
+        if image_id.startswith("loot/") and not self.loot_atlas.isNull():
+            try:
+                _, kind, name = image_id.split("/", 2)
+                if kind == "crate":
+                    column = CRATE_TIERS.index(name)
+                    row = 0
+                elif kind == "gear":
+                    index = list(GEAR).index(name)
+                    column, row = index % 8, 1 + index // 8
+                elif kind == "potion":
+                    column = list(POTIONS).index(name)
+                    row = 3
+                else:
+                    return QImage()
+                art = self.loot_atlas.copy(column * 24, row * 24, 24, 24)
+                size.setWidth(24)
+                size.setHeight(24)
+                return art
+            except (ValueError, IndexError):
+                return QImage()
+        if image_id.startswith("flesh/"):
+            try:
+                _, cosmetic, encoded_path = image_id.split("/", 2)
+                if cosmetic not in COSMETICS:
+                    return QImage()
+                key = (cosmetic, encoded_path)
+                if key not in self.tinted_flesh:
+                    path = base64.urlsafe_b64decode(encoded_path).decode()
+                    tinted = QImage(path).convertToFormat(QImage.Format.Format_ARGB32)
+                    if tinted.isNull():
+                        return QImage()
+                    if cosmetic == "bitcrush":
+                        coarse = tinted.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio,
+                                                Qt.TransformationMode.FastTransformation)
+                        tinted = coarse.scaled(tinted.size(), Qt.AspectRatioMode.IgnoreAspectRatio,
+                                                Qt.TransformationMode.FastTransformation)
+                    if cosmetic == "shadow_twin":
+                        tinted = self._shadow_image(tinted)
+                    elif cosmetic == "temporal_echo":
+                        tinted = self._echo_image(tinted)
+                    else:
+                        painter = QPainter(tinted)
+                        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
+                        painter.setOpacity(0.82 if cosmetic == "hologram" else 0.48 if cosmetic in ("smoke", "mint", "sky", "violet", "gold", "rose", "sunlight") else 0.18)
+                        painter.fillRect(tinted.rect(), QColor(COSMETICS[cosmetic][2]))
+                        if cosmetic == "hologram":
+                            spacing = max(6, tinted.height() // 28)
+                            painter.setOpacity(0.36)
+                            for y in range(spacing // 2, tinted.height(), spacing):
+                                painter.fillRect(0, y, tinted.width(), max(2, spacing // 8), QColor("#e6fff4"))
+                        painter.end()
+                    if len(self.tinted_flesh) >= 64:
+                        self.tinted_flesh.clear()
+                    self.tinted_flesh[key] = tinted
+                art = self.tinted_flesh[key]
+                size.setWidth(art.width())
+                size.setHeight(art.height())
+                return art
+            except (ValueError, OSError):
+                return QImage()
+        if image_id.startswith("equipment/"):
+            try:
+                art = self.equipment[int(image_id.split("/")[1])]
+                size.setWidth(art.width())
+                size.setHeight(art.height())
+                return art
+            except (IndexError, ValueError):
+                return QImage()
         if image_id.startswith("sprite/"):
             try:
                 path, region = json.loads(base64.urlsafe_b64decode(image_id[7:]).decode())
@@ -99,8 +325,27 @@ class SkinImages(QQuickImageProvider):
         return frame
 
 
+class SurfaceImages(QQuickImageProvider):
+    def __init__(self, game):
+        super().__init__(QQuickImageProvider.ImageType.Image)
+        self.game = game
+
+    def requestImage(self, image_id, size, requested_size):
+        surface = self.game.get_surface(image_id.partition("/")[0])
+        if surface is None or not surface.is_visible():
+            return QImage()
+        frame = surface.frame_snapshot()
+        if not frame:
+            return QImage()
+        image = QImage(frame, surface.width, surface.height, surface.width * 4,
+                       QImage.Format.Format_RGBA8888).copy()
+        size.setWidth(surface.width)
+        size.setHeight(surface.height)
+        return image
+
+
 class QtGame(
-    LegacyUiMixin, QtModUiMixin, GameStateMixin, RpcMixin, SaveManagerMixin,
+    LegacyUiMixin, QtModUiMixin, ProgressionMixin, StreakMixin, GameStateMixin, ThreadedRpcMixin, SaveManagerMixin,
     ModManagerMixin, ModApiMixin, GameplayCoreMixin, ConsoleCommandsMixin, QObject,
 ):
     liveChanged = Signal()
@@ -111,7 +356,11 @@ class QtGame(
     darkModeChanged = Signal()
     confirmationRequested = Signal(str, str)
     clicked = Signal()
+    crateDropSpawned = Signal(int, str, str)
+    upgradePurchased = Signal(str)
     legacyIdle = Signal(object)
+    surfaceFrameChanged = Signal(str, int)
+    catMeowPlayingChanged = Signal()
 
     @Property(QObject, constant=True)
     def legacyOverlay(self):
@@ -147,8 +396,13 @@ class QtGame(
         self._log_lock = threading.Lock()
         self._pending_action = None
         self._cancel_action = None
-        self._sound = None
-        self._sound_path = None
+        self._pitched_sounds = {}
+        self._cat_meow_sounds = None
+        self._ui_sounds = {}
+        self._effect_sounds = {}
+        self._pending_crate_drops = {}
+        self._next_crate_drop_id = 1
+        self._last_ui_hover = 0.0
         self._old_stdout, self._old_stderr = sys.stdout, sys.stderr
         self._stdout = _ConsoleStream(sys.stdout, self._queue_log)
         self._stderr = _ConsoleStream(sys.stderr, self._queue_log)
@@ -214,6 +468,10 @@ class QtGame(
     def consoleText(self):
         return self._console_text
 
+    @Property(bool, notify=catMeowPlayingChanged)
+    def catMeowPlaying(self):
+        return any(sound.isPlaying() for sound in self._cat_meow_sounds or ())
+
     @Property(str, notify=consoleChanged)
     def consoleHtml(self):
         lines = []
@@ -249,6 +507,22 @@ class QtGame(
         self._sprites_dirty = True
         self._sync_motion_timer()
 
+    def _surface_frame_changed(self, surface_id, revision):
+        self.surfaceFrameChanged.emit(surface_id, revision)
+
+    @Slot(str, int, bool, int, result=bool)
+    def surfaceKey(self, surface_id, key, pressed, modifiers):
+        return self.surface_key_event(surface_id, key, pressed, modifiers)
+
+    @Slot(str, str, float, float, int, int, result=bool)
+    def surfacePointer(self, surface_id, kind, x, y, button, buttons):
+        return self.surface_pointer_event(surface_id, kind, x, y, button, buttons)
+
+    @Slot(str, result=int)
+    def surfaceRevision(self, surface_id):
+        surface = self.get_surface(surface_id)
+        return surface.revision if surface is not None else 0
+
     update_labels = _notify_live
     refresh_upgrades_ui = _notify_catalog
     refresh_achievements_ui = _notify_live
@@ -272,6 +546,7 @@ class QtGame(
     def _publish(self):
         if self._initializing or self._closed:
             return
+        self.advance_streak()
         with self._log_lock:
             text = "".join(self._log_pending)
             self._log_pending.clear()
@@ -283,9 +558,11 @@ class QtGame(
             currencies = [{
                 "id": name, "name": data.get("display_name", name),
                 "amount": self.get_currency(name),
-                "cpc": self.effective_fpc() if name == self.primary_currency else self.compute_cpc(name),
+                "cpc": self.compute_click_gain(name),
                 "cps": self.compute_cps(name),
-            } for name, data in self.currencies.items()]
+            } for name, data in self.currencies.items()
+                if name != "tokens" or vanilla_enabled(self, "rebirth")
+                or name in self._mod_currency_owners]
             upgrade_info = {}
             for uid, upgrade in self.upgrades.items():
                 owned = self.get_upgrade_count(uid)
@@ -294,6 +571,7 @@ class QtGame(
                 upgrade_info[uid] = {
                     "owned": owned, "cost": cost, "visible": visible,
                     "canBuy": visible and self.get_currency(upgrade.get("cost_currency", "flesh")) >= cost,
+                    "milestone": equipment_progress(self, uid, owned),
                 }
             stats = ["Currencies"]
             stats.extend(f"{c['name']}: {c['amount']:,.0f}   Per click: {c['cpc']:g}   Per second: {c['cps']:g}" for c in currencies)
@@ -301,12 +579,17 @@ class QtGame(
             stats.extend(f"{upgrade.get('name', uid)}: {self.get_upgrade_count(uid)}" for uid, upgrade in self.upgrades.items())
             stats.extend(["", f"Total clicks: {self.state.get('total_clicks', 0):,}"])
             self._live = {
+                "vanilla": {part: vanilla_enabled(self, part) for part in VANILLA_PARTS},
                 "title": self.current_game_title, "saveName": self.active_save_name,
                 "saveId": self.active_save_id, "saveKind": self.active_save_kind,
                 "currencies": currencies, "upgradeInfo": upgrade_info,
                 "totalClicks": self.state.get("total_clicks", 0),
-                "imageUrl": QUrl.fromLocalFile(self.flesh_image_path).toString(),
+                "imageUrl": self._flesh_display_url(),
+                "fleshCopyUrl": self._flesh_copy_url(),
                 "statsText": "\n".join(stats),
+                "workshop": workshop_state(self),
+                "progression": self.progression_snapshot(),
+                "modSettings": self._mod_settings_snapshot(),
                 "achievements": [{"id": key, "name": data.get("name", key), "desc": data.get("desc", "")}
                     for key, data in self.achievements.items()
                     if isinstance(data, dict) and data.get("unlocked") and self._achievement_is_active(key, data)],
@@ -316,6 +599,19 @@ class QtGame(
         if self._catalog_dirty:
             self._catalog_dirty = False
             self._catalog = {
+                "vanilla": {part: vanilla_enabled(self, part) for part in VANILLA_PARTS},
+                "builtinTabs": {
+                    "upgrades": vanilla_enabled(self, "upgrades") or bool(self.upgrades),
+                    "achievements": vanilla_enabled(self, "achievements") or any(
+                        data.get("source") == "mod" and self._achievement_is_active(key, data)
+                        for key, data in self.achievements.items() if isinstance(data, dict)),
+                    "crates": bool(self._progression_defs("crates")) or any(
+                        d["owner"] != "__vanilla__" for table in ("equipment", "skins", "potions", "run_upgrades")
+                        for d in self._progression_defs(table).values()),
+                    "rebirth": vanilla_enabled(self, "rebirth") or bool(self._progression_defs("rebirth_upgrades")),
+                },
+                "progression": self.progression_catalog(),
+                "shopItems": equipment_catalog(self),
                 "upgrades": [{"id": uid, "name": data.get("name", uid), "desc": data.get("desc", ""),
                     "category": data.get("category", data.get("type", "misc")),
                     "currency": self.currencies.get(data.get("cost_currency", "flesh"), {}).get("display_name", data.get("cost_currency", "flesh"))}
@@ -345,6 +641,31 @@ class QtGame(
                 records.append(dict(record, url=record["source"]))
         return records
 
+    def _flesh_display_url(self):
+        image = self._skin_image()
+        if image:
+            return QUrl.fromLocalFile(image).toString()
+        selected = self.active_cosmetic()
+        if selected in CAST_FLESH_ASSETS:
+            return QUrl.fromLocalFile(find_app_asset(CAST_FLESH_ASSETS[selected])).toString()
+        if selected not in TESTABLE_COSMETICS:
+            return QUrl.fromLocalFile(self.flesh_image_path).toString()
+        if selected in ("top_hat", "wobble", "rose", "reflection", "shadow_twin", "zero_gravity", "sandcastle", "temporal_echo", "sunlight", "magnet", "ticket_roll", "pinball", "clockwork", "cat", "smoke", "mint", "sky", "violet", "thunderhead", "slot_machine", "blacksmith", "comet",
+                        "sundial", "prism_rain", "lightbox", "firefly_jar", "event_horizon", "star_map", "aurora_ribbon", "deep_blue", "tidal_planet", "paper_crown", "price_tag", "sticky_note", "button_badge",
+                        "wind_up_key", "party_hat", "sunglasses", "squeaky_toy", "tiny_flag", "neon_outline", "snow_globe", "lava_lamp", "marionette"):
+            return QUrl.fromLocalFile(self.flesh_image_path).toString()
+        if selected in COSMETICS:
+            path = base64.urlsafe_b64encode(self.flesh_image_path.encode()).decode()
+            return f"image://skins/flesh/{selected}/{path}"
+        return QUrl.fromLocalFile(self.flesh_image_path).toString()
+
+    def _flesh_copy_url(self):
+        selected = self.active_cosmetic()
+        if selected not in ("shadow_twin", "temporal_echo"):
+            return ""
+        path = base64.urlsafe_b64encode(self.flesh_image_path.encode()).decode()
+        return f"image://skins/flesh/{selected}/{path}"
+
     def _mod_ui_snapshot(self):
         data = self.qt_mod_ui_snapshot()
         return {
@@ -359,6 +680,8 @@ class QtGame(
                 for button in data["buttons"]],
             "images": [dict(image, tabId=image["tab_id"], url=image["source"])
                 for image in data["images"] if image["tab_id"] is not None],
+            "surfaces": [dict(surface, tabId=surface["tab_id"])
+                for surface in data["surfaces"]],
         }
 
     def _sync_motion_timer(self):
@@ -424,30 +747,249 @@ class QtGame(
         result = SaveManagerMixin.save_current_progress(self, auto_backup)
         return result
 
-    @Slot()
-    def click(self):
-        if not self._startup_guard:
-            self.on_click(None, 1, 0, 0)
+    def create_save_slot(self, name, save_kind="singleplayer"):
+        self._flush_pending_crate_drops()
+        return SaveManagerMixin.create_save_slot(self, name, save_kind)
+
+    def load_save_slot(self, save_id, allow_missing_mods=False):
+        self._flush_pending_crate_drops()
+        return SaveManagerMixin.load_save_slot(self, save_id, allow_missing_mods)
+
+    def _queue_crate_drop(self, kind, tier):
+        if tier not in self._progression_defs("crates"):
+            return
+        drop_id = self._next_crate_drop_id
+        self._next_crate_drop_id += 1
+        self._pending_crate_drops[drop_id] = (self.active_save_id, kind, tier)
+        self.crateDropSpawned.emit(drop_id, kind, tier)
+        QTimer.singleShot(2500, lambda: self.collectCrateDrop(drop_id))
+
+    def _flush_pending_crate_drops(self):
+        for drop_id in list(self._pending_crate_drops):
+            self.collectCrateDrop(drop_id)
+
+    @Slot(int, result=bool)
+    def collectCrateDrop(self, drop_id):
+        pending = self._pending_crate_drops.pop(drop_id, None)
+        if pending is None or pending[2] not in self._progression_defs("crates"):
+            return False
+        save_id, kind, tier = pending
+        if save_id != self.active_save_id:
+            slot = load_save_slot_data(save_id)
+            if slot:
+                from progression import normalize_progression
+                counts = normalize_progression(slot["state"])["crates"][kind]
+                counts[tier] = counts.get(tier, 0) + 1
+                write_save_slot_data(slot)
+        else:
+            self._add_crate(kind, tier)
+            self._emit_event("crate_found", {"kind": kind, "tier": tier})
+            self._emit_event("crate_collected", {"kind": kind, "tier": tier})
+            self._set_status(f"Collected a {self._progression_defs('crates')[tier]['name']} {kind} crate!")
+        return True
+
+    @Slot(result="QVariantMap")
+    @Slot(float, float, result="QVariantMap")
+    def click(self, x=0.0, y=0.0):
+        if self._startup_guard:
+            return {"gain": 0, "critical": False, "accepted": False}
+        accepted = self.on_click(None, 1, x, y)
+        return {"gain": float(getattr(self, "_last_click_gains", {}).get(self.primary_currency, 0)),
+                "critical": bool(getattr(self, "_last_click_critical", False)), "accepted": bool(accepted),
+                "streakFill": self.streak_snapshot()["fill"]}
+
+    @Slot(float, float, float, float, result=bool)
+    def isFleshHit(self, x, y, width, height):
+        asset = CAST_FLESH_ASSETS.get(self.active_cosmetic())
+        path = self._skin_image() or (find_app_asset(asset) if asset else self.flesh_image_path)
+        return self._image_hit(path, x, y, width, height)
+
+    @Slot(float, float, float, float, result=bool)
+    def isClockworkHit(self, x, y, width, height):
+        return self._image_hit(find_app_asset("skins/clockwork/preview.png"), x, y, width, height)
+
+    @Slot(str, float, float, float, float, result=bool)
+    def isCosmeticPropHit(self, cosmetic, x, y, width, height):
+        asset = {"snow_globe": "skins/snow-globe-back.png",
+                 "lava_lamp": "skins/lava-lamp-back.png"}.get(cosmetic)
+        return bool(asset) and self._image_hit(find_app_asset(asset), x, y, width, height)
+
+    @Slot(float, float, float, float, float, float, float, float, float, float, result=bool)
+    def isEventHorizonHit(self, x, y, width, height, scale, body_x, body_y, pixel_ratio, origin_x, origin_y):
+        if not hasattr(self, "_event_horizon_hit_map"):
+            from event_horizon import EventHorizonHitMap
+            self._event_horizon_hit_map = EventHorizonHitMap()
+        return self._event_horizon_hit_map.hit(x, y, width, height, scale, body_x, body_y,
+                                              self.flesh_image_path, pixel_ratio, origin_x, origin_y)
+
+    @Slot(float, float, float, float, result=bool)
+    def isCatHit(self, x, y, width, height):
+        pose = "cat-open.png" if self.catMeowPlaying else "cat-closed.png"
+        return self._image_hit(find_app_asset(f"skins/{pose}"), x, y, width, height)
+
+    def _image_hit(self, path, x, y, width, height):
+        if width <= 0 or height <= 0 or x < 0 or y < 0 or x >= width or y >= height:
+            return False
+        if getattr(self, "_flesh_hit_image_path", None) != path:
+            self._flesh_hit_image_path = path
+            self._flesh_hit_image = QImage(path)
+        image = self._flesh_hit_image
+        if image.isNull():
+            return False
+        pixel_x = min(image.width() - 1, int(x * image.width() / width))
+        pixel_y = min(image.height() - 1, int(y * image.height() / height))
+        return image.pixelColor(pixel_x, pixel_y).alpha() > 32
 
     @Slot(str)
     def buy(self, uid):
         if not self._startup_guard:
-            self.on_buy_upgrade_clicked(None, uid)
+            if self.on_buy_upgrade_clicked(None, uid):
+                self.upgradePurchased.emit(uid)
+
+    @Slot(str, str)
+    def buyCrate(self, kind, tier):
+        self._perform(lambda: self.buy_crate(kind, tier))
+
+    @Slot(str, str, result="QVariantMap")
+    def openCrate(self, kind, tier):
+        if self._startup_guard:
+            return {"ok": False, "result": "Finish loading the save first."}
+        preview = self.crate_preview(kind, tier)
+        result = self._perform(lambda: self.open_crate(kind, tier))
+        if not isinstance(result, tuple):
+            return {"ok": False, "result": "Crate could not be opened."}
+        return {"ok": bool(result[0]), "result": result[1],
+                "rarity": getattr(self, "_last_crate_rarity", "") if result[0] else "",
+                "reward": getattr(self, "_last_crate_reward", {}) if result[0] else {},
+                "pool": preview if result[0] else []}
+
+    @Slot(str)
+    def equipGear(self, item_id):
+        self._perform(lambda: self.equip_gear(item_id))
+
+    @Slot(str)
+    def selectCosmetic(self, item_id):
+        self._perform(lambda: self.select_cosmetic(item_id))
+
+    @Slot(str)
+    def usePotion(self, item_id):
+        self._perform(lambda: self.use_potion(item_id))
+
+    @Slot(str)
+    def buyRebirthUpgrade(self, key):
+        self._perform(lambda: self.buy_rebirth_upgrade(key))
+
+    @Slot(str, "QVariant")
+    def setRegisteredModSetting(self, setting_id, value):
+        definition = getattr(self, "_mod_setting_definitions", {}).get(setting_id)
+        if definition:
+            self._perform(lambda: self.set_mod_setting(definition["key"], value, namespace=definition["owner"]))
+
+    @Slot()
+    def requestRebirth(self):
+        if self._startup_guard:
+            return
+        amount = self.unclaimed_tokens()
+        if amount < 1:
+            self._set_status("Earn more flesh before rebirthing.")
+            return
+        self._confirm("Rebirth", f"Reset your flesh and vanilla upgrades for {amount} Flesh Tokens? Equipped items, cosmetics, and unopened crates stay.", self.rebirth)
+
+    @Slot(str)
+    def chooseRebirthBonus(self, key):
+        self._perform(lambda: self.choose_rebirth_bonus(key))
 
     def play_squish(self):
         self.clicked.emit()
 
+    def _play_pitched_sound(self, path, profile):
+        from PySide6.QtMultimedia import QSoundEffect
+        paths = pitch_variant_paths(path, profile)
+        sounds = self._pitched_sounds.get(paths)
+        if sounds is None:
+            sounds = []
+            for variant in paths:
+                sound = QSoundEffect(self)
+                sound.setSource(QUrl.fromLocalFile(variant))
+                sounds.append(sound)
+            self._pitched_sounds[paths] = sounds
+        sound = random.choice(sounds)
+        sound.setVolume(self.settings.get("click_sound_volume", 15) / 100)
+        sound.play()
+
     def play_click_sound(self):
         if not self.settings.get("play_click_sound"):
             return
+        cosmetic = self.active_cosmetic()
+        skin = self._progression_defs("skins").get(cosmetic, {})
+        if skin.get("click_sound"):
+            self._play_pitched_sound(skin["click_sound"], skin["sound_profile"])
+            return
+        if cosmetic == "cat":
+            return
+        path = find_app_asset("ui/bitcrush-click.wav") if cosmetic == "bitcrush" else self.click_sound_path
+        profile = "mechanical" if cosmetic in ("bitcrush", "clockwork") else "default"
+        self._play_pitched_sound(path, profile)
+
+    def _play_cat_meow(self):
         from PySide6.QtMultimedia import QSoundEffect
-        if self._sound is None:
-            self._sound = QSoundEffect(self)
-        if self._sound_path != self.click_sound_path:
-            self._sound_path = self.click_sound_path
-            self._sound.setSource(QUrl.fromLocalFile(self.click_sound_path))
-        self._sound.setVolume(self.settings.get("click_sound_volume", 15) / 100)
-        self._sound.play()
+        if self._cat_meow_sounds is None:
+            self._cat_meow_sounds = []
+            for variant in pitch_variant_paths(find_app_asset("skins/cat-meow.wav"), "organic"):
+                sound = QSoundEffect(self)
+                sound.playingChanged.connect(self.catMeowPlayingChanged.emit)
+                sound.setSource(QUrl.fromLocalFile(variant))
+                self._cat_meow_sounds.append(sound)
+        sound = random.choice(self._cat_meow_sounds)
+        sound.setVolume(self.settings.get("click_sound_volume", 15) / 100)
+        sound.play()
+
+    @Slot(str)
+    def playUiSound(self, kind):
+        if not self.settings.get("play_ui_sounds", True) or kind not in ("hover", "press"):
+            return
+        if kind == "hover":
+            now = time.monotonic()
+            if now - self._last_ui_hover < 0.05:
+                return
+            self._last_ui_hover = now
+        if kind == "press":
+            self._play_pitched_sound(find_app_asset("ui/button-press.wav"), "mechanical")
+            return
+        from PySide6.QtMultimedia import QSoundEffect
+        sound = self._ui_sounds.get(kind)
+        if sound is None:
+            sound = QSoundEffect(self)
+            sound.setSource(QUrl.fromLocalFile(find_app_asset(f"ui/button-{kind}.wav")))
+            self._ui_sounds[kind] = sound
+        sound.setVolume(self.settings.get("click_sound_volume", 15) / 100)
+        sound.play()
+
+    @Slot(str)
+    def playEffectSound(self, kind):
+        if kind == "cat":
+            if self.settings.get("play_effect_sounds", True):
+                self._play_cat_meow()
+            return
+        files = {"roll": "crate-roll.wav", "open": "crate-open.wav",
+                 "rare": "crate-rare.wav", "collect": "crate-collect.wav",
+                 "streak": "streak-full.wav", "glass": "glass-crack.wav",
+                 "mint": "mint-rustle.wav", "squeak": "toy-squeak.wav",
+                 "blacksmith": "blacksmith-hit.wav", "coin": "gold-coin-clink.wav"}
+        if not self.settings.get("play_effect_sounds", True) or kind not in files:
+            return
+        if kind in ("mint", "glass", "squeak", "blacksmith"):
+            self._play_pitched_sound(find_app_asset(f"ui/{files[kind]}"),
+                                     "mechanical" if kind in ("glass", "blacksmith") else "organic")
+            return
+        from PySide6.QtMultimedia import QSoundEffect
+        sound = self._effect_sounds.get(kind)
+        if sound is None:
+            sound = QSoundEffect(self)
+            sound.setSource(QUrl.fromLocalFile(find_app_asset(f"ui/{files[kind]}")))
+            self._effect_sounds[kind] = sound
+        sound.setVolume(self.settings.get("click_sound_volume", 15) / 100)
+        sound.play()
 
     def set_flesh_image(self, path):
         self.flesh_image_path = self.resolve_asset_path(path, self._current_mod_namespace())
@@ -461,7 +1003,7 @@ class QtGame(
         if key == "theme":
             if value not in ("light", "dark", "system"):
                 return
-        elif key in ("enable_rpc", "play_click_sound", "auto_reload_mod_changes"):
+        elif key in ("enable_rpc", "play_click_sound", "play_ui_sounds", "play_effect_sounds", "auto_reload_mod_changes", "show_full_numbers"):
             value = bool(value)
         elif key in ("click_sound_volume", "squish_ms"):
             try:
@@ -556,13 +1098,13 @@ class QtGame(
 
     @Slot()
     def importSave(self):
-        path, _ = QFileDialog.getOpenFileName(None, "Import save", "", "Fleshfetch saves (*.json);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(None, "Import save", "", "fleshfetch saves (*.json);;All files (*)")
         if path:
             self._perform(lambda: self.import_save_slot(path))
 
     @Slot(str)
     def exportSave(self, save_id):
-        path, _ = QFileDialog.getSaveFileName(None, "Export save", f"{save_id}.json", "Fleshfetch saves (*.json)")
+        path, _ = QFileDialog.getSaveFileName(None, "Export save", f"{save_id}.json", "fleshfetch saves (*.json)")
         if path:
             self._perform(lambda: self.export_save_slot(save_id, path))
 
@@ -581,7 +1123,7 @@ class QtGame(
         if self.settings.get("auto_reload_mod_changes", True):
             self._set_status(self.reload_mods())
         else:
-            self._set_status("Run /reload or restart Fleshfetch to apply mod changes.")
+            self._set_status("Run /reload or restart fleshfetch to apply mod changes.")
         self._notify_catalog()
 
     @Slot(str)
@@ -650,6 +1192,72 @@ class QtGame(
         self._qt_view_width = max(1, width)
         self._qt_view_height = max(1, height)
 
+    @Slot(str, float, float, result=bool)
+    def spriteHit(self, sprite_id, x, y):
+        sprite = self._mod_sprites.get(sprite_id)
+        if not sprite or not sprite.draggable or not sprite.is_visible():
+            return False
+        image = QImage(sprite.image_path)
+        if image.isNull() or sprite.width <= 0 or sprite.height <= 0:
+            return False
+        drawn = image.size().scaled(int(sprite.width), int(sprite.height), Qt.AspectRatioMode.KeepAspectRatio)
+        left = (sprite.width - drawn.width()) / 2
+        top = (sprite.height - drawn.height()) / 2
+        if not (left <= x < left + drawn.width() and top <= y < top + drawn.height()):
+            return False
+        pixel_x = min(image.width() - 1, int((x - left) * image.width() / drawn.width()))
+        pixel_y = min(image.height() - 1, int((y - top) * image.height() / drawn.height()))
+        return image.pixelColor(pixel_x, pixel_y).alpha() > 32
+
+    @Slot(str)
+    def grabSprite(self, sprite_id):
+        sprite = self._mod_sprites.get(sprite_id)
+        if sprite and sprite.draggable:
+            sprite.set_velocity(0, 0)
+            sprite.set_auto_motion(False)
+            self.emit_event("sprite_grabbed", {"sprite_id": sprite_id})
+
+    @Slot(str, float, float)
+    def moveSprite(self, sprite_id, x, y):
+        sprite = self._mod_sprites.get(sprite_id)
+        if sprite and sprite.draggable:
+            sprite.move_to(x, y)
+
+    @Slot(str, float, float)
+    def releaseSprite(self, sprite_id, vx, vy):
+        sprite = self._mod_sprites.get(sprite_id)
+        if sprite and sprite.draggable:
+            sprite.set_velocity(vx, vy)
+            self.emit_event("sprite_released", {"sprite_id": sprite_id, "vx": vx, "vy": vy})
+            if not sprite._manual_motion:
+                self._sync_motion_timer()
+
+    def get_sprite_platforms(self):
+        window = getattr(self, "_qml_window", None)
+        if window is None:
+            return []
+        root = window.contentItem()
+        pending = [root]
+        items = []
+        layer = None
+        while pending:
+            item = pending.pop()
+            if item.objectName() == "spriteLayer":
+                layer = item
+            if item.objectName() == "spritePlatform" and item.isVisible():
+                items.append(item)
+            pending.extend(item.childItems())
+        if layer is None:
+            return []
+        platforms = []
+        for item in items:
+            point = item.mapToItem(layer, QPointF(0, 0))
+            top = point.y() + item.height() + 3 if item.property("tabStyle") else point.y()
+            if -item.height() <= top <= layer.height():
+                platforms.append({"x": point.x(), "y": top,
+                                  "width": item.width(), "height": item.height()})
+        return platforms
+
     def _restore_streams(self):
         if sys.stdout is self._stdout:
             sys.stdout = self._old_stdout
@@ -662,6 +1270,7 @@ class QtGame(
             return
         try:
             if not self._startup_guard:
+                self._flush_pending_crate_drops()
                 self.save_current_progress(auto_backup=True)
             self.shutdown_rpc()
             self._leaderboard.close()
@@ -672,8 +1281,13 @@ class QtGame(
                     scheduler.source_remove(source)
             self._pulse.stop()
             self._motion.stop()
-            if self._sound:
-                self._sound.stop()
+            for sounds in self._pitched_sounds.values():
+                for sound in sounds:
+                    sound.stop()
+            for sound in self._cat_meow_sounds or ():
+                sound.stop()
+            for sound in self._effect_sounds.values():
+                sound.stop()
         finally:
             self._closed = True
             self._legacy_idle_pending.clear()
@@ -681,9 +1295,12 @@ class QtGame(
 
 
 def create_application(argv=None):
+    from app_version import VERSION
+
     ensure_app_dirs()
     app = QApplication.instance() or QApplication(sys.argv[:1] if argv is None else argv)
-    app.setApplicationName("Fleshfetch")
+    app.setApplicationName("fleshfetch")
+    app.setApplicationVersion(VERSION)
     icon = find_app_asset("flesh.ico")
     if Path(icon).exists():
         app.setWindowIcon(QIcon(icon))
@@ -699,6 +1316,7 @@ def create_application(argv=None):
             print(message, file=sys.stderr)
     engine.warnings.connect(record_qml_errors)
     engine.addImageProvider("skins", SkinImages())
+    engine.addImageProvider("surfaces", SurfaceImages(game))
     from PySide6.QtQml import qmlRegisterType
     from qt_legacy_drawing import LegacyPaintItem
     qmlRegisterType(LegacyPaintItem, "Fleshfetch.Legacy", 1, 0, "LegacyPaintItem")
@@ -707,14 +1325,28 @@ def create_application(argv=None):
     if not engine.rootObjects():
         game.shutdown()
         raise RuntimeError("The Qt interface could not be loaded. " + "\n".join(qml_errors))
+    game._qml_window = engine.rootObjects()[0]
     engine.rootObjects()[0].installEventFilter(game._legacy_pointer_filter)
     app.aboutToQuit.connect(game.shutdown)
     QTimer.singleShot(0, game.ready)
     return app, engine, game
 
 
-def main():
+def main(on_first_frame=None):
     app, engine, game = create_application()
+    if on_first_frame is not None:
+        window = engine.rootObjects()[0]
+        first_frame_seen = False
+
+        def finish_splash():
+            nonlocal first_frame_seen
+            if first_frame_seen:
+                return
+            first_frame_seen = True
+            on_first_frame()
+
+        window.frameSwapped.connect(finish_splash)
+        QTimer.singleShot(3000, finish_splash)
     try:
         return app.exec()
     finally:

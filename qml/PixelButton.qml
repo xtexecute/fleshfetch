@@ -3,6 +3,7 @@ import QtQuick.Controls
 
 AbstractButton {
     id: control
+    objectName: "spritePlatform"
     required property var theme
     property string tooltip: ""
     property bool selected: false
@@ -19,6 +20,12 @@ AbstractButton {
     property real animatedOffset: visualOffset
     Behavior on animatedOffset { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
     hoverEnabled: true
+    onHoveredChanged: {
+        if (hovered && enabled) game.playUiSound("hover")
+    }
+    onPressed: {
+        if (enabled) game.playUiSound("press")
+    }
     focusPolicy: Qt.StrongFocus
     padding: 12
     topPadding: 10

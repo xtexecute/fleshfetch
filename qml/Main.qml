@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import "StableList.js" as StableList
 
 Window {
     id: mainWindow
@@ -12,22 +13,34 @@ Window {
     minimumWidth: 760
     minimumHeight: 560
     flags: Qt.Window | Qt.FramelessWindowHint
-    title: game.live.title || "Fleshfetch"
+    title: game.live.title || "fleshfetch"
     color: appTheme.canvas
     property string selectedTab: "upgrades"
+    ListModel { id: tabEntries; dynamicRoles: true }
     readonly property var tabs: {
         let result = [{id: "upgrades", label: "Upgrades"}, {id: "saves", label: "Saves"},
             {id: "stats", label: "Statistics"}, {id: "achievements", label: "Achievements"},
+            {id: "crates", label: "Crates"}, {id: "rebirth", label: "Rebirth"},
             {id: "settings", label: "Settings"}, {id: "console", label: "Console"},
-            {id: "leaderboard", label: "Leaderboard"}]
+            {id: "leaderboard", label: "Leaderboard"}].filter(function(t) {
+                return (game.catalog.builtinTabs || {})[t.id] !== false
+            })
         for (const t of game.catalog.tabs || []) {
             if (t.visible !== false && !result.some(function(r) { return r.id === t.id })) result.push(t)
         }
         return result
     }
     onTabsChanged: {
-        if (!tabs.some(function(t) { return t.id === mainWindow.selectedTab })) selectedTab = "upgrades"
+        StableList.sync(tabEntries, tabs.map(function(t) { return {id: t.id, label: t.label} }))
+        if (!tabs.some(function(t) { return t.id === mainWindow.selectedTab })) selectedTab = tabs.length ? tabs[0].id : "saves"
     }
+    onSelectedTabChanged: Qt.callLater(function() {
+        for (let i = 0; i < tabButtons.count; ++i) {
+            const button = tabButtons.itemAt(i)
+            if (button && button.modelData.id === mainWindow.selectedTab)
+                tabsBar.ensureVisible(button.x, button.width)
+        }
+    })
     onClosing: function(close) {
         const result = game.shutdown()
         if (result === false) close.accepted = false
@@ -89,6 +102,7 @@ Window {
                 }
                 ClickPane {
                     objectName: "clickPane"
+                    visible: (game.live.vanilla || {}).clicker !== false
                     theme: appTheme
                     SplitView.preferredWidth: mainWindow.width < 900 ? 210 : 285
                     SplitView.minimumWidth: 180
@@ -98,24 +112,64 @@ Window {
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 340
                     spacing: -6
-                    Flickable {
+                    RowLayout {
+                        id: tabsNavigator
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 54
+                        Layout.minimumHeight: 54
+                        Layout.maximumHeight: 54
+                        Layout.fillHeight: false
+                        spacing: 4
+                        readonly property bool overflowing: tabRow.width > width
+                        PixelButton {
+                            objectName: "scrollTabsLeft"
+                            theme: appTheme
+                            text: "\u2039"
+                            tooltip: "Scroll tabs left"
+                            Accessible.name: tooltip
+                            focusPolicy: Qt.NoFocus
+                            visible: tabsNavigator.overflowing
+                            enabled: tabsBar.contentX > 0
+                            Layout.preferredWidth: 26
+                            padding: 0
+                            onClicked: tabsBar.contentX = Math.max(0, tabsBar.contentX - tabsBar.width * 0.7)
+                        }
+                        Flickable {
                         id: tabsBar
                         objectName: "tabsBar"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 48
+                        Layout.fillHeight: true
                         contentWidth: tabRow.width
                         contentHeight: height
                         flickableDirection: Flickable.HorizontalFlick
                         boundsBehavior: Flickable.StopAtBounds
                         clip: true
+                        function ensureVisible(left, itemWidth) {
+                            if (left < contentX) contentX = left
+                            else if (left + itemWidth > contentX + width) contentX = left + itemWidth - width
+                            contentX = Math.max(0, Math.min(contentX, Math.max(0, contentWidth - width)))
+                        }
+                        onWidthChanged: contentX = Math.max(0, Math.min(contentX, Math.max(0, contentWidth - width)))
+                        WheelHandler {
+                            onWheel: function(event) {
+                                const delta = event.pixelDelta.x || event.pixelDelta.y
+                                    || (event.angleDelta.x || event.angleDelta.y) * 0.5
+                                tabsBar.contentX = Math.max(0, Math.min(tabsBar.contentX - delta,
+                                    Math.max(0, tabsBar.contentWidth - tabsBar.width)))
+                                event.accepted = true
+                            }
+                        }
                         Row {
                             id: tabRow
                             y: 2
                             spacing: 5
                             Repeater {
-                                model: mainWindow.tabs
+                                id: tabButtons
+                                model: tabEntries
                                 delegate: PixelButton {
-                                    required property var modelData
+                                    required property var model
+                                    readonly property var modelData: model
+                                    objectName: "tab:" + modelData.id
                                     theme: tabTheme
                                     Theme {
                                         id: tabTheme
@@ -128,11 +182,26 @@ Window {
                                     Accessible.role: Accessible.PageTab
                                     Accessible.name: text
                                     onClicked: mainWindow.selectedTab = modelData.id
-                                    onActiveFocusChanged: if (activeFocus) tabsBar.contentX = Math.max(0, Math.min(x, tabsBar.contentWidth - tabsBar.width))
+                                    onVisualFocusChanged: if (visualFocus) tabsBar.ensureVisible(x, width)
                                 }
                             }
                         }
                         ScrollBar.horizontal: ScrollBar { policy: tabsBar.contentWidth > tabsBar.width ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff; height: 4 }
+                        }
+                        PixelButton {
+                            objectName: "scrollTabsRight"
+                            theme: appTheme
+                            text: "\u203a"
+                            tooltip: "Scroll tabs right"
+                            Accessible.name: tooltip
+                            focusPolicy: Qt.NoFocus
+                            visible: tabsNavigator.overflowing
+                            enabled: tabsBar.contentX < tabsBar.contentWidth - tabsBar.width
+                            Layout.preferredWidth: 26
+                            padding: 0
+                            onClicked: tabsBar.contentX = Math.min(tabsBar.contentWidth - tabsBar.width,
+                                tabsBar.contentX + tabsBar.width * 0.7)
+                        }
                     }
                     PixelFrame {
                         theme: appTheme
@@ -157,6 +226,8 @@ Window {
                             case "settings": return settingsComponent
                             case "console": return consoleComponent
                             case "leaderboard": return leaderboardComponent
+                            case "crates": return cratesComponent
+                            case "rebirth": return rebirthComponent
                             default: return modComponent
                             }
                         }
@@ -188,6 +259,7 @@ Window {
         }
         Item {
             id: spriteLayer
+            objectName: "spriteLayer"
             x: mainLayout.x + gameArea.x
             y: mainLayout.y + gameArea.y
             width: gameArea.width
@@ -209,6 +281,7 @@ Window {
             Repeater {
                 model: game.spriteModel
                 delegate: Image {
+                    id: spriteImage
                     required property var spriteData
                     objectName: "sprite:" + spriteData.id
                     source: spriteData.url || ""
@@ -220,6 +293,52 @@ Window {
                     opacity: spriteData.opacity === undefined ? 1 : Number(spriteData.opacity)
                     visible: spriteData.visible !== false
                     smooth: false
+                    MouseArea {
+                        id: spriteDrag
+                        anchors.fill: parent
+                        enabled: spriteImage.spriteData.draggable === true
+                        hoverEnabled: enabled
+                        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                        property real grabX: 0
+                        property real grabY: 0
+                        property real lastX: 0
+                        property real lastY: 0
+                        property real speedX: 0
+                        property real speedY: 0
+                        property double lastTime: 0
+                        onPressed: function(mouse) {
+                            if (!game.spriteHit(spriteImage.spriteData.id, mouse.x, mouse.y)) {
+                                mouse.accepted = false
+                                return
+                            }
+                            grabX = mouse.x
+                            grabY = mouse.y
+                            const point = spriteImage.mapToItem(spriteLayer, mouse.x, mouse.y)
+                            lastX = point.x
+                            lastY = point.y
+                            speedX = 0
+                            speedY = 0
+                            lastTime = Date.now()
+                            game.grabSprite(spriteImage.spriteData.id)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return
+                            const point = spriteImage.mapToItem(spriteLayer, mouse.x, mouse.y)
+                            const now = Date.now()
+                            const elapsed = Math.max(1, now - lastTime)
+                            speedX = Math.max(-650, Math.min(650, (point.x - lastX) * 1000 / elapsed))
+                            speedY = Math.max(-650, Math.min(650, (point.y - lastY) * 1000 / elapsed))
+                            lastX = point.x
+                            lastY = point.y
+                            lastTime = now
+                            game.moveSprite(spriteImage.spriteData.id, point.x - grabX, point.y - grabY)
+                        }
+                        onReleased: {
+                            if (Date.now() - lastTime > 100) { speedX = 0; speedY = 0 }
+                            game.releaseSprite(spriteImage.spriteData.id, speedX, speedY)
+                        }
+                        onCanceled: game.releaseSprite(spriteImage.spriteData.id, 0, 0)
+                    }
                 }
             }
         }
@@ -296,5 +415,7 @@ Window {
     Component { id: settingsComponent; SettingsPage { theme: appTheme } }
     Component { id: consoleComponent; ConsolePage { theme: appTheme } }
     Component { id: leaderboardComponent; LeaderboardPage { theme: appTheme } }
+    Component { id: cratesComponent; CratesPage { theme: appTheme } }
+    Component { id: rebirthComponent; RebirthPage { theme: appTheme } }
     Component { id: modComponent; ModPage { theme: appTheme; tabId: mainWindow.selectedTab } }
 }

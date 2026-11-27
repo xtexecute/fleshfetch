@@ -1,0 +1,20 @@
+mint-rustle.wav
+Original recording: Foliage04.wav from Nature Sounds Pack
+Creator: Antoine Goumain
+Source: https://opengameart.org/content/nature-sounds-pack
+License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+Changes: None
+
+toy-squeak.wav
+Original recording: squeak toy - squeak2.wav
+Creator: bart
+Source: https://opengameart.org/content/squeak-toy-sounds
+License: CC0, https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Converted from 32-bit float WAV to 16-bit PCM WAV without resampling
+
+gold-coin-clink.wav
+Original recording: impactMetal_light_004.ogg from Impact Sounds
+Creator: Kenney
+Source: https://kenney.nl/assets/impact-sounds
+License: CC0, https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Shortened, faded, and lowered in volume

@@ -1,4 +1,4 @@
-"""Read-only terminal browser for Fleshfetch saves and installed mods."""
+"""Read-only terminal browser for fleshfetch saves and installed mods."""
 
 from __future__ import annotations
 
@@ -232,6 +232,7 @@ def _float(value, default=0.0) -> float:
 
 
 def _vanilla_rates(state: dict) -> tuple[dict, dict]:
+    from vanilla_shop import production_multiplier
     currencies = state.get("currencies") if isinstance(state.get("currencies"), dict) else {}
     cpc = {str(name): 0.0 for name in currencies}
     cps = {str(name): 0.0 for name in currencies}
@@ -244,9 +245,10 @@ def _vanilla_rates(state: dict) -> tuple[dict, dict]:
         except (TypeError, ValueError):
             count = 0
         for effect in upgrade.get("currency_effects", []):
+            multiplier = production_multiplier(upgrade, count)
             currency = str(effect.get("currency") or "flesh")
-            cpc[currency] = cpc.get(currency, 0.0) + _float(effect.get("cpc", 0.0)) * count
-            cps[currency] = cps.get(currency, 0.0) + _float(effect.get("cps", 0.0)) * count
+            cpc[currency] = cpc.get(currency, 0.0) + _float(effect.get("cpc", 0.0)) * count * multiplier
+            cps[currency] = cps.get(currency, 0.0) + _float(effect.get("cps", 0.0)) * count * multiplier
     return cpc, cps
 
 
@@ -381,7 +383,7 @@ def game_info_lines(data: BrowserData) -> list[str]:
     return [
         *ASCII_LOGO,
         "",
-        "Fleshfetch terminal information browser",
+        "fleshfetch terminal information browser",
         "",
         f"Save directory: {SAVES_DIR}",
         f"User mod directory: {USER_MODS_DIR}",

@@ -28,7 +28,7 @@ static const wchar_t *skip_executable(const wchar_t *command_line) {
 
 
 static int show_launch_error(const wchar_t *message) {
-    MessageBoxW(NULL, message, L"Fleshfetch could not start", MB_OK | MB_ICONERROR);
+    MessageBoxW(NULL, message, L"fleshfetch could not start", MB_OK | MB_ICONERROR);
     return 1;
 }
 
@@ -49,13 +49,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
 
     DWORD path_length = GetModuleFileNameW(NULL, launcher_path, 32768);
     if (path_length == 0 || path_length >= 32768) {
-        return show_launch_error(L"The Fleshfetch installation path is too long.");
+        return show_launch_error(L"The fleshfetch installation path is too long.");
     }
 
     wcscpy_s(root_dir, 32768, launcher_path);
     wchar_t *separator = wcsrchr(root_dir, L'\\');
     if (separator == NULL) {
-        return show_launch_error(L"Fleshfetch could not locate its installation folder.");
+        return show_launch_error(L"fleshfetch could not locate its installation folder.");
     }
     *separator = L'\0';
 
@@ -65,12 +65,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
             L"%ls\\runtime\\fleshfetch-runtime.exe",
             root_dir
         ) < 0) {
-        return show_launch_error(L"Fleshfetch could not construct its runtime path.");
+        return show_launch_error(L"fleshfetch could not construct its runtime path.");
     }
     if (GetFileAttributesW(runtime_exe) == INVALID_FILE_ATTRIBUTES) {
         return show_launch_error(
             L"runtime\\fleshfetch-runtime.exe is missing.\n\n"
-            L"Extract the complete Fleshfetch release before launching it."
+            L"Extract the complete fleshfetch release before launching it."
         );
     }
 
@@ -79,11 +79,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     const wchar_t *arguments = skip_executable(GetCommandLineW());
     if (*arguments) {
         if (swprintf_s(child_command, 32768, L"\"%ls\" %ls", runtime_exe, arguments) < 0) {
-            return show_launch_error(L"The Fleshfetch command line is too long.");
+            return show_launch_error(L"The fleshfetch command line is too long.");
         }
     } else {
         if (swprintf_s(child_command, 32768, L"\"%ls\"", runtime_exe) < 0) {
-            return show_launch_error(L"The Fleshfetch command line is too long.");
+            return show_launch_error(L"The fleshfetch command line is too long.");
         }
     }
 
@@ -100,7 +100,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
             &startup,
             &process
         )) {
-        return show_launch_error(L"Fleshfetch could not launch its runtime executable.");
+        return show_launch_error(L"fleshfetch could not launch its runtime executable.");
     }
 
     CloseHandle(process.hThread);
@@ -113,7 +113,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         swprintf_s(
             error_message,
             1024,
-            L"The Fleshfetch runtime exited unexpectedly.\n\n"
+            L"The fleshfetch runtime exited unexpectedly.\n\n"
             L"Exit code: %ld (0x%08lX)\n\n"
             L"If a startup log was created, it is located at:\n"
             L"%%APPDATA%%\\fleshfetch\\startup.log",

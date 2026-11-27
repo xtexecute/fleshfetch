@@ -6,3 +6,4 @@ if exist "%~dp0.venv\Scripts\pythonw.exe" (
     python main.py
     if errorlevel 1 pause
 )
+Gre

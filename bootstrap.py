@@ -58,11 +58,11 @@ def _show_startup_error():
     try:
         import ctypes
         message = (
-            "Fleshfetch crashed during startup.\n\n"
+            "fleshfetch crashed during startup.\n\n"
             "A traceback was written to:\n"
             f"{STARTUP_LOG_FILE}"
         )
-        ctypes.windll.user32.MessageBoxW(None, message, "Fleshfetch crashed", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, message, "fleshfetch crashed", 0x10)
     except Exception:
         pass
 

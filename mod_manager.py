@@ -69,7 +69,8 @@ class ModManagerMixin:
 
     def _achievement_is_active(self, key: str, data: dict) -> bool:
         if data.get("source") != "mod":
-            return True
+            from mod_api import vanilla_enabled
+            return key not in DEFAULT_ACHIEVEMENTS or vanilla_enabled(self, "achievements")
         mod_id = data.get("mod_id")
         if not mod_id:
             return False
@@ -102,7 +103,11 @@ class ModManagerMixin:
         }
 
     def _add_mod_deprecation_warning(self, message: str, mod_info: dict = None):
-        mod_info = mod_info or getattr(self, "_current_mod_info", None)
+        if mod_info is None:
+            owner = self._current_mod_namespace()
+            current = getattr(self, "_current_mod_info", None)
+            mod_info = current if current is not None and current.get("id") == owner else next(
+                (info for info in getattr(self, "installed_mods", ()) if info.get("id") == owner), None)
         if mod_info is None:
             return
         message = str(message or "").strip()
@@ -256,6 +261,8 @@ class ModManagerMixin:
                     continue
 
                 self._current_mod_info = mod_info
+                previous_streak = dict(getattr(self, "_streak_settings", {}))
+                registration_ok = False
                 try:
                     loader = importlib.machinery.SourceFileLoader(entry, mod_py)
                     spec   = importlib.util.spec_from_loader(loader.name, loader)
@@ -267,6 +274,7 @@ class ModManagerMixin:
                         mod.register(self)
                     self.loaded_mod_ids.add(mod_info["id"])
                     self.installed_mods.append(mod_info)
+                    registration_ok = True
                 except ModDependencyError as e:
                     mod_info["dependency_blocked"] = True
                     mod_info["dependency_missing"] = list(getattr(e, "missing", []) or [str(e)])
@@ -275,6 +283,11 @@ class ModManagerMixin:
                 except Exception as e:
                     print(f"[mods] Failed to load '{entry}': {e}")
                 finally:
+                    if not registration_ok:
+                        self._remove_progression_owner(mod_info["id"])
+                        self._base_cpc_overrides = {key: value for key, value in getattr(self, "_base_cpc_overrides", {}).items()
+                                                    if key[0] != mod_info["id"]}
+                        self._streak_settings = previous_streak
                     self._current_mod_info = None
 
         self._apply_selected_game_title()
@@ -344,6 +357,11 @@ class ModManagerMixin:
             pass
 
     def _remove_mod_runtime_objects(self):
+        if hasattr(self, "_flush_pending_crate_drops"):
+            self._flush_pending_crate_drops()
+        for key, reward in list(getattr(self, "_mod_crate_rewards", {}).items()):
+            if reward.get("owner") != "__global__":
+                self._mod_crate_rewards.pop(key, None)
         for timer_id, timer_info in list(self._mod_timers.items()):
             if timer_info.get("owner") == "__global__":
                 continue
@@ -388,6 +406,10 @@ class ModManagerMixin:
                 continue
             sprite.remove()
 
+        for surface in list(getattr(self, "_qt_surfaces", {}).values()):
+            if getattr(surface, "owner", "__global__") != "__global__":
+                surface.remove()
+
         for layer_id, layer in list(self._mod_draw_layers.items()):
             if getattr(layer, "owner", "__global__") == "__global__":
                 continue
@@ -404,9 +426,13 @@ class ModManagerMixin:
         self._pending_draw_layers = [layer for layer in self._pending_draw_layers if getattr(layer, "owner", "__global__") == "__global__"]
 
     def _reset_mod_registries(self):
+        self._disabled_vanilla = set()
+        self._reset_progression_registry()
+        self._mod_setting_definitions = {}
         self.currencies = clone_json_data(BASE_CURRENCIES)
         self.upgrades = clone_json_data(BASE_UPGRADES)
         self.primary_currency = "flesh"
+        self._base_cpc_overrides = {}
         self.flesh_image_path = find_app_asset("flesh.png")
         self.click_sound_path = find_app_asset("click.wav")
         self._mod_currency_owners = {}

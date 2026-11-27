@@ -1,39 +1,44 @@
-# Fleshfetch
+# fleshfetch
 
-A Qt-based modding framework and clicker engine(?) written in Python. <br>
-This repo contains the core modding API, alongside **Mod #1 (The Base Game)** which serves as the game you see when installed. You can mod the game pretty easily. <br>
-I used to say this is a joke here, but I really am not sure anymore.
+A Qt clicker game and Python modding framework. The base game is Mod #1.
+I used to call this a joke, but I'm not so sure anymore.
 
-This game is **IN DEVELOPMENT**
+This game is **IN DEVELOPMENT**.
 
-PLEASE WRITE ALL BUGS IN ISSUES
+**1.5.0-rc1** is a prerelease. New features are frozen while bugs and compatibility
+are checked. Progression can still become repetitive after several rebirths;
+longer-run pacing needs more player feedback before the stable release.
+
+Please report bugs in Issues.
 
 ## Branches
 
-- [`main`](https://github.com/xtexecute/fleshfetch/tree/main): Main.
-- [`experimental`](https://github.com/xtexecute/fleshfetch/tree/experimental): Passes basic testing, might be buggy but almost always has release candidates and new stuff and has a much lower chance of corrupting your data. Still not zero. Oh, and I don't have playtesters so don't expect this to be super great.
-- [`bleeding-edge`](https://github.com/xtexecute/fleshfetch/tree/bleeding-edge): It's on the label, things here might and will be buggy, may crash, may corrupt your saves and such and there will not be releases here
+- [`main`](https://github.com/xtexecute/fleshfetch/tree/main): Stable releases.
+- [`experimental`](https://github.com/xtexecute/fleshfetch/tree/experimental): Changes that have passed basic testing and are ready for wider testing.
+- [`bleeding-edge`](https://github.com/xtexecute/fleshfetch/tree/bleeding-edge): The newest available code. Every in-progress change may be committed here, so it may be incomplete, broken, or unable to launch.
 
-Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Use the experimental bug report form for experimental and bleeding edge please 
+Changes move from `bleeding-edge` to `experimental`, then from `experimental` to `main` when they are ready. Experimental builds are published as prereleases. Use the experimental bug report form for experimental and bleeding-edge builds.
 
 ## Run
-Run `python main.py` for the game
-Debian 13: install the release `.deb` then run `fleshfetch`.
 
-Arch Linux command: `fleshfetch`
- 
-Windows: run fleshfetch.exe from the .zip
+Windows: extract the release ZIP and run `fleshfetch.exe` from its `fleshfetch` folder.
 
-## Attribution
+Arch Linux: install from the AUR, then run `fleshfetch`.
 
-Fleshfetch is open-source software licensed under the MIT License.
+Debian 13: install the release `.deb`, then run `fleshfetch`.
 
-If you modify, fork, or redistribute Fleshfetch, please keep the original copyright and license notices as required by the MIT License.
+Source: install `requirements-qt.txt` with pip, then run `python main.py`. Qt is the default frontend. The optional GTK frontend is available with `python main.py --gtk` if its dependencies are installed.
 
-I would appreciate it if you credited **xtexecute** as the original creator and linked back to the original Fleshfetch repository.
+Run `fleshfetch --info` for the terminal save and mod browser.
+Run `fleshfetch --version` to check the installed version.
 
-You are welcome to modify and build upon the project <sup>[[see license]](https://github.com/xtexecute/fleshfetch/blob/main/LICENSE)</sup>
+Mod authors: [current mod API](docs/mod_ui.md), [live surfaces](docs/mod_surfaces.md).
 
-<br><br><br><br><br><br>
+See the [changelog](CHANGELOG.md) for recent releases.
 
-<sub>The Flesh image by Sifat wizard via Vecteezy.</sub>
+The flesh image is by Sifat Wizard via Vecteezy.
+The Bitcrush click and glass-crack sounds use Kenney's [UI Audio](https://kenney.nl/assets/ui-audio) and [Impact Sounds](https://kenney.nl/assets/impact-sounds) packs (CC0).
+Blacksmith's hammer hit is an isolated strike from Hansjoerg Malthaner's [Smithing Sound](https://opengameart.org/content/smithing-sound) ([CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)). It was trimmed and faded for the game.
+Mint's leaf rustle is "Foliage04.wav" from Antoine Goumain's [Nature Sounds Pack](https://opengameart.org/content/nature-sounds-pack) ([CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)). The game uses the recording unmodified.
+Squeaky Toy uses "squeak toy - squeak2.wav" by bart from [Squeak toy sounds](https://opengameart.org/content/squeak-toy-sounds) (CC0).
+Cat's meow was rendered with the MIT-licensed [MeowSynth recreation](https://github.com/mcardonaserrano/meowsynth-mpc) by mcardonaserrano, based on the original MeowSynth by KNOBSTER.

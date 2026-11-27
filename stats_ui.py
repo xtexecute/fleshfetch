@@ -41,10 +41,7 @@ class StatsUiMixin:
             amount = self.get_currency(reg_name)
             display = cur_data.get("display_name", reg_name)
             cps = self.compute_cps(reg_name)
-            if reg_name == self.primary_currency:
-                cpc = self.effective_fpc()
-            else:
-                cpc = self.compute_cpc(reg_name)
+            cpc = self.compute_click_gain(reg_name)
             lines.append(
                 f"{display}: {int(amount)}  "
                 f"(per second: {cps:.2f}, per click: {cpc:.2f})"

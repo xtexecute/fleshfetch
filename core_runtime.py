@@ -89,12 +89,17 @@ def initialize_runtime(self):
         if legacy > 0:
             self.state["currencies"]["flesh"] = float(legacy)
 
+    from progression import normalize_progression
+    normalize_progression(self.state)
+
     # ---------- registries ----------
-    self.currencies = dict(BASE_CURRENCIES)
-    self.upgrades   = dict(BASE_UPGRADES)
+    self.currencies = clone_json_data(BASE_CURRENCIES)
+    self.upgrades   = clone_json_data(BASE_UPGRADES)
+    self._disabled_vanilla = set()
 
     # primary currency: used for base per-click gain when mods replace vanilla flesh
     self.primary_currency = "flesh"
+    self._base_cpc_overrides = {}
     self._rate_cache_dirty = True
     self._cached_cpc = {}
     self._cached_cps = {}
@@ -113,7 +118,7 @@ def initialize_runtime(self):
     self._pending_draw_layers = []
     # map of tab_id -> Gtk.Box (the page widget), filled after build_ui
     self._tab_pages = {}
-    self._builtin_tab_ids = {"upgrades", "achievements", "leaderboard", "saves", "settings", "console", "stats"}
+    self._builtin_tab_ids = {"upgrades", "achievements", "leaderboard", "saves", "settings", "console", "stats", "crates", "rebirth"}
     self._mod_tab_owners = {}
     self._mod_button_widgets = []
     self._mod_image_widgets = []
@@ -130,6 +135,7 @@ def initialize_runtime(self):
     self._active_mod_owner = None
     self.current_game_title = DEFAULT_GAME_TITLE
     self._event_hooks = {}
+    self._mod_crate_rewards = {}
     self._next_event_hook_id = 1
     self._click_modifiers = {}
     self._next_click_modifier_id = 1

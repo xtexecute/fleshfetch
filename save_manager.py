@@ -455,6 +455,7 @@ class SaveManagerMixin:
         return False
 
     def _apply_save_slot_without_presaving_current(self, slot: dict, reason="load", emit_load_event=True):
+        self._skin_frame = None
         self.active_save_id = normalize_save_id(slot["id"])
         self.active_save_name = normalize_save_name(slot.get("name") or self.active_save_id)
         self.active_save_kind = normalize_save_kind(slot.get("save_kind"))
@@ -590,6 +591,9 @@ class SaveManagerMixin:
             self.state["currencies"] = {"flesh": 0.0}
         self.state["currencies"].setdefault("flesh", 0.0)
 
+        from progression import normalize_progression
+        normalize_progression(self.state)
+
         for k, v in DEFAULT_ACHIEVEMENTS.items():
             if k not in self.achievements:
                 self.achievements[k] = dict(v)
@@ -602,6 +606,8 @@ class SaveManagerMixin:
             state["currencies"].setdefault(registry_name, 0.0)
         state["upgrades_owned"] = {}
         state["total_clicks"] = 0
+        from progression import new_progression
+        state["progression"] = new_progression()
         return state
 
     def _fresh_save_achievements(self):
@@ -633,6 +639,7 @@ class SaveManagerMixin:
         self.save_current_progress(auto_backup=True)
         backup_save_slot(slot["id"], reason="preload")
         self.active_save_id = normalize_save_id(slot["id"])
+        self._skin_frame = None
         self.active_save_name = normalize_save_name(slot.get("name") or self.active_save_id)
         self.active_save_kind = normalize_save_kind(slot.get("save_kind"))
         self.active_save_created_at = slot.get("created_at") or current_save_timestamp()
@@ -903,18 +910,44 @@ class SaveManagerMixin:
         return data
 
     def get_mod_setting(self, key: str, default=None, namespace=None):
-        return self.get_mod_settings(namespace).get(key, default)
+        owner = self._current_mod_namespace(namespace)
+        if default is None:
+            definition = getattr(self, "_mod_setting_definitions", {}).get(f"{owner}:{key}", {})
+            default = definition.get("default")
+        return self.get_mod_settings(owner).get(key, default)
 
     def set_mod_setting(self, key: str, value, namespace=None):
-        data = self.get_mod_settings(namespace)
+        owner = self._current_mod_namespace(namespace)
+        definition = getattr(self, "_mod_setting_definitions", {}).get(f"{owner}:{key}")
+        if definition:
+            value = self._validate_registered_setting(definition, value)
+        data = self.get_mod_settings(owner)
+        if definition and data.get(str(key), definition["default"]) == value:
+            return value
         data[str(key)] = clone_json_data(value)
         save_json(SETTINGS_FILE, self.settings)
+        if definition:
+            self._notify_mod_setting_changed(definition, value)
         return value
 
+    def _notify_mod_setting_changed(self, definition, value):
+        owner, key = definition["owner"], definition["key"]
+        if definition["on_change"]:
+            try:
+                self._run_with_mod_owner(owner, definition["on_change"], value)
+            except Exception as exc:
+                print(f"[settings] {owner}:{key}: {exc}")
+        self._emit_event("mod_setting_changed", {"mod_id": owner, "key": key, "value": value})
+        self.update_labels()
+
     def delete_mod_setting(self, key: str, namespace=None):
-        data = self.get_mod_settings(namespace)
+        owner = self._current_mod_namespace(namespace)
+        data = self.get_mod_settings(owner)
         if str(key) in data:
             data.pop(str(key), None)
             save_json(SETTINGS_FILE, self.settings)
+            definition = getattr(self, "_mod_setting_definitions", {}).get(f"{owner}:{key}")
+            if definition:
+                self._notify_mod_setting_changed(definition, definition["default"])
             return True
         return False

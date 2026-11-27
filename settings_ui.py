@@ -353,7 +353,7 @@ class SettingsUiMixin:
             self.settings_info_label.set_text(f"{message} {reload_message}")
         else:
             self.settings_info_label.set_text(
-                f"{message} Run /reload or restart Fleshfetch to {action_text}."
+                f"{message} Run /reload or restart fleshfetch to {action_text}."
             )
             self.refresh_mod_settings_list()
 

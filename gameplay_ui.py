@@ -1,10 +1,13 @@
 import os
+import random
 import sys
 import time
 
+from click_audio import pitch_variant_paths
 from gtk_compat import Gdk, GLib, Gtk
 
 from defaults import DEFAULT_SETTINGS
+from gameplay_core import accept_manual_click
 
 
 class GameplayUiMixin:
@@ -78,6 +81,7 @@ class GameplayUiMixin:
         path = self.click_sound_path
         if not os.path.exists(path):
             return
+        path = random.choice(pitch_variant_paths(path))
 
         volume = max(0, min(100, int(self.settings.get("click_sound_volume", DEFAULT_SETTINGS["click_sound_volume"]))))
 
@@ -373,7 +377,7 @@ class GameplayUiMixin:
         for reg_name, cur_data in self.currencies.items():
             amount = self.get_currency(reg_name)
             # hide mod currencies until the player first obtains some
-            show_currency = amount > 0 or reg_name == "flesh"
+            show_currency = amount > 0 or reg_name in ("flesh", "tokens")
             if not show_currency:
                 if reg_name in amount_labels:
                     amount_labels[reg_name].set_visible(False)
@@ -459,16 +463,17 @@ class GameplayUiMixin:
         GLib.idle_add(do_squish)
 
     def on_click(self, gesture, n_press, x, y):
+        from mod_api import vanilla_enabled
+        if not vanilla_enabled(self, "clicker"):
+            return False
+        if not accept_manual_click(self):
+            return False
         self.play_squish()
         self.play_click_sound()
 
-        # primary currency uses base fpc + upgrade cpc; others use only upgrade cpc
         base_gains = {}
         for reg_name in self.currencies:
-            if reg_name == self.primary_currency:
-                gain = self.effective_fpc()
-            else:
-                gain = self.compute_cpc(reg_name)
+            gain = self.compute_click_gain(reg_name)
             if gain:
                 base_gains[reg_name] = gain
 
@@ -513,6 +518,7 @@ class GameplayUiMixin:
         if self.flesh >= 1000: self.unlock_achievement("thousand_flesh")
 
         self.update_labels()
+        return True
 
     def unlock_achievement(self, key: str):
         if key not in self.achievements:

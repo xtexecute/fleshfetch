@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import os
 import re
+import math
 
 import runtime_scheduler as GLib
 
-from defaults import BASE_UPGRADES, DEFAULT_ACHIEVEMENTS
+from defaults import BASE_CURRENCIES, BASE_UPGRADES, DEFAULT_ACHIEVEMENTS
+
+
+VANILLA_PARTS = ("upgrades", "achievements", "currencies", "crates", "rebirth",
+                 "streak", "equipment", "cosmetics", "clicker")
+
+
+def vanilla_enabled(game, part):
+    return part not in getattr(game, "_disabled_vanilla", ())
 
 
 EVENT_ALIASES = {
@@ -96,24 +105,117 @@ def version_meets_requirement(version: str, required: str) -> bool:
 
 
 class ModApiMixin:
+    def set_base_cpc(self, amount, currency=None):
+        """Set click income before upgrade and multiplier bonuses; zero is valid."""
+        currency = self.primary_currency if currency is None else currency
+        if currency not in self.currencies:
+            raise ValueError("Register the currency before setting its base CPC")
+        amount = float(amount)
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("Base CPC must be a finite, nonnegative number")
+        owner = self._current_mod_namespace()
+        overrides = getattr(self, "_base_cpc_overrides", None)
+        if overrides is None:
+            overrides = self._base_cpc_overrides = {}
+        key = (owner, currency)
+        overrides.pop(key, None)
+        overrides[key] = amount
+        self._mod_registry_changed()
+        return amount
+
+    def is_vanilla_enabled(self, part):
+        """Check one of the component names accepted by disable_vanilla()."""
+        if part not in VANILLA_PARTS:
+            raise ValueError(f"Unknown vanilla component: {part}")
+        return vanilla_enabled(self, part)
+
+    def _mod_registry_changed(self):
+        self.invalidate_rate_cache()
+        if hasattr(self, "_notify_catalog"):
+            self._notify_catalog()
+            self.update_labels()
+            return
+        if hasattr(self, "upgrades_listbox"):
+            self.refresh_upgrades_ui()
+        if hasattr(self, "achievements_listbox"):
+            self.refresh_achievements_ui()
+        if hasattr(self, "currency_labels"):
+            self.update_labels()
+
     def _normalize_event_name(self, event_name: str) -> str:
         name = str(event_name or "").strip().lower().replace("-", "_").replace(" ", "_")
         return EVENT_ALIASES.get(name, name)
 
+    def register_setting(self, key, *, name, default, kind="bool", minimum=0, maximum=100,
+                         step=1, choices=None, on_change=None):
+        """Declare a persistent setting and its control on the Settings page."""
+        from progression_registry import number
+        key = str(key).strip()
+        if not key or ":" in key or not str(name).strip():
+            raise ValueError("Setting key and name are required; keys cannot contain colons")
+        if kind not in ("bool", "number", "choice"):
+            raise ValueError("Setting kind must be bool, number or choice")
+        if on_change is not None and not callable(on_change):
+            raise ValueError("on_change must be callable")
+        minimum = number(minimum, "minimum", -1000000, 1000000)
+        maximum = number(maximum, "maximum", minimum, 1000000)
+        step = number(step, "step", 0.000001, 1000000)
+        choices = list(choices or [])
+        if kind == "choice" and (not choices or any(not isinstance(c, str) for c in choices) or len(set(choices)) != len(choices)):
+            raise ValueError("Choices must be distinct strings")
+        owner = self._current_mod_namespace()
+        setting = dict(key=key, id=f"{owner}:{key}", owner=owner, name=str(name), kind=kind,
+                       minimum=minimum, maximum=maximum, step=step, choices=choices, on_change=on_change)
+        default = self._validate_registered_setting(setting, default)
+        setting["default"] = default
+        registry = getattr(self, "_mod_setting_definitions", None)
+        if registry is None:
+            registry = self._mod_setting_definitions = {}
+        if setting["id"] in registry:
+            raise ValueError("Setting already registered")
+        values = self.get_mod_settings(owner)
+        try:
+            value = self._validate_registered_setting(setting, values.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        values[key] = value
+        registry[setting["id"]] = setting
+        self._mod_registry_changed()
+        return key
+
+    @staticmethod
+    def _validate_registered_setting(setting, value):
+        if setting["kind"] == "bool":
+            if not isinstance(value, bool):
+                raise ValueError("Setting value must be boolean")
+            return value
+        if setting["kind"] == "choice":
+            if value not in setting["choices"]:
+                raise ValueError("Unknown setting choice")
+            return value
+        from progression_registry import number
+        if isinstance(value, bool):
+            raise ValueError("Setting value must be numeric")
+        return number(value, "setting value", setting["minimum"], setting["maximum"])
+
+    def _mod_settings_snapshot(self):
+        return [{key: value for key, value in dict(d, value=self.get_mod_setting(d["key"], namespace=d["owner"])).items()
+                 if key != "on_change"} for d in getattr(self, "_mod_setting_definitions", {}).values()]
+
     def _current_mod_namespace(self, namespace=None) -> str:
         if namespace:
             return str(namespace).strip()
+        active_owner = getattr(self, "_active_mod_owner", None)
+        if active_owner is not None:
+            return active_owner
         current = getattr(self, "_current_mod_info", None)
         if current is not None and current.get("id"):
             return current["id"]
-        active_owner = getattr(self, "_active_mod_owner", None)
-        if active_owner:
-            return active_owner
         return "__global__"
 
     def _run_with_mod_owner(self, owner, callback, *args, **kwargs):
         previous_owner = getattr(self, "_active_mod_owner", None)
-        self._active_mod_owner = owner if owner and owner != "__global__" else None
+        self._active_mod_owner = owner or "__global__"
         try:
             return callback(*args, **kwargs)
         finally:
@@ -381,30 +483,45 @@ class ModApiMixin:
         return True
 
     def register_currency(self, registry_name: str, display_name: str):
-        """Register a new currency. Safe to call if it already exists."""
-        if registry_name not in self.currencies:
-            self.currencies[registry_name] = {"display_name": display_name}
+        """Register or rename a currency without replacing its saved balance."""
+        if not isinstance(registry_name, str) or not registry_name.strip():
+            raise ValueError("Currency registry_name must be a non-empty string")
+        if not isinstance(display_name, str) or not display_name.strip():
+            raise ValueError("Currency display_name must be a non-empty string")
+        self.currencies.setdefault(registry_name, {})["display_name"] = display_name
         if registry_name not in self.state["currencies"]:
             self.state["currencies"][registry_name] = 0.0
         owner = self._current_mod_namespace()
         if owner != "__global__":
             self._mod_currency_owners[registry_name] = owner
-        self.invalidate_rate_cache()
+        self._mod_registry_changed()
         self.mark_save_dirty(auto_backup=False)
 
     def register_upgrade(self, uid: str, data: dict):
         """Add or update an upgrade in the registry."""
         if isinstance(data, dict):
+            data = dict(data)
             legacy_fields = [field for field in ("fpc", "fps") if field in data]
             if legacy_fields and "currency_effects" not in data:
                 fields = ", ".join(legacy_fields)
                 self._add_mod_deprecation_warning(
                     f"Upgrade '{uid}' uses legacy {fields} fields. Use currency_effects with cpc/cps instead."
                 )
+                existing = self.upgrades.get(uid, {})
+                effects = existing.get("currency_effects", [])
+                flesh = [effect for effect in effects if effect.get("currency") == "flesh"]
+                replacement = {
+                    "currency": "flesh",
+                    "cpc": data.get("fpc", sum(e.get("cpc", 0) for e in flesh) if flesh else existing.get("fpc", 0)),
+                    "cps": data.get("fps", sum(e.get("cps", 0) for e in flesh) if flesh else existing.get("fps", 0)),
+                    "on_buy": sum(e.get("on_buy", 0) for e in flesh),
+                }
+                data["currency_effects"] = [dict(e) for e in effects if e.get("currency") != "flesh"] + [replacement]
             if "type" in data and "category" not in data:
                 self._add_mod_deprecation_warning(
                     f"Upgrade '{uid}' uses legacy type. Use category instead."
                 )
+                data["category"] = data["type"]
         if uid in self.upgrades:
             self.upgrades[uid].update(data)
         else:
@@ -412,7 +529,7 @@ class ModApiMixin:
         owner = self._current_mod_namespace()
         if owner != "__global__":
             self._mod_upgrade_owners[uid] = owner
-        self.invalidate_rate_cache()
+        self._mod_registry_changed()
 
     def register_achievement(self, key: str, data: dict):
         """Add or update an achievement."""
@@ -425,11 +542,14 @@ class ModApiMixin:
         if "unlocked" not in data:
             merged["unlocked"] = bool(existing.get("unlocked", False))
 
-        mod_info = self._current_mod_info
-        if mod_info is not None:
+        owner = self._current_mod_namespace()
+        mod_info = getattr(self, "_current_mod_info", None)
+        if mod_info is None or mod_info.get("id") != owner:
+            mod_info = next((info for info in getattr(self, "installed_mods", ()) if info.get("id") == owner), None)
+        if owner != "__global__":
             merged["source"] = "mod"
-            merged["mod_id"] = mod_info["id"]
-            merged["mod_name"] = mod_info["name"]
+            merged["mod_id"] = owner
+            merged["mod_name"] = (mod_info or {}).get("name", owner)
         elif key in DEFAULT_ACHIEVEMENTS:
             merged["source"] = "builtin"
             merged.pop("mod_id", None)
@@ -440,17 +560,18 @@ class ModApiMixin:
             merged.setdefault("mod_name", "Unknown mod")
 
         self.achievements[key] = merged
+        self._mod_registry_changed()
         self.mark_save_dirty(auto_backup=False)
 
     def set_flesh_image(self, path: str):
-        """Override the clickable image. Call from register() before build_ui runs."""
+        """Replace the clickable image; the Qt frontend also supports live changes."""
         self.flesh_image_path = path
         if hasattr(self, "picture"):
             self.load_flesh_image()
 
     def set_click_sound(self, path: str):
-        """Override the click sound. Must be a .wav file.
-        Can be called at any time — the new sound takes effect on the next click.
+        """Replace the default click sound with a .wav file at any time.
+        Skin-specific audio is separate; disable cosmetics for a full replacement.
 
         Example:
             game.set_click_sound(os.path.join(MOD_DIR, "assets", "pop.wav"))
@@ -472,7 +593,7 @@ class ModApiMixin:
         using the switch beside the mod in Settings.
         """
         mod_info = self._current_mod_info
-        if mod_info is None:
+        if mod_info is None or mod_info.get("id") != self._current_mod_namespace():
             raise RuntimeError("set_game_title() must be called from a mod's register() function")
         if not isinstance(title, str) or not title.strip():
             raise ValueError("Game title must be a non-empty string")
@@ -487,7 +608,10 @@ class ModApiMixin:
                    Box with 6px spacing is created and returned so you can append
                    widgets to it.
 
-        Returns the Gtk.Box that is the tab's page, so you can populate it:
+        Qt returns a TabHandle with add_label(), add_button(), set_theme(),
+        hide(), show() and remove(). New Qt mods do not need GTK imports.
+
+        The GTK fallback returns a Gtk.Box, so you can populate it:
 
             box = game.add_tab("mystats", "My Stats")
             box.append(Gtk.Label(label="Hello from my mod!"))
@@ -536,11 +660,10 @@ class ModApiMixin:
 
         tab_id   — ID of the target tab. Built-in IDs are:
                    "upgrades", "achievements", "leaderboard", "saves",
-                   "settings", "console", "stats"
+                   "settings", "console", "stats", "crates", "rebirth"
                    Mod tab IDs are whatever string you passed to add_tab().
         label    — button text
-        callback — function called when clicked. Receives the Gtk.Button as its
-                   only argument.
+        callback — receives a ButtonHandle on Qt, or a Gtk.Button on GTK.
 
         Can be called before or after build_ui — if the tab already exists the
         button is added immediately, otherwise it is queued.
@@ -570,39 +693,61 @@ class ModApiMixin:
         self.add_tab_button(tab_id, label, callback)
 
     def disable_vanilla_achievements(self):
-        """Remove all built-in achievements. Mod achievements registered after
-        this call are unaffected."""
-        for key in list(DEFAULT_ACHIEVEMENTS.keys()):
-            self.achievements.pop(key, None)
+        """Compatibility wrapper for disable_vanilla(achievements=True)."""
+        self._add_mod_deprecation_warning("Use disable_vanilla(achievements=True) instead.")
+        return self.disable_vanilla(achievements=True)
 
     def disable_vanilla_upgrades(self):
-        """Remove all built-in upgrades. Mod upgrades registered after
-        this call are unaffected."""
-        for key in list(BASE_UPGRADES.keys()):
-            self.upgrades.pop(key, None)
-        self.invalidate_rate_cache()
+        """Compatibility wrapper for disable_vanilla(upgrades=True)."""
+        self._add_mod_deprecation_warning("Use disable_vanilla(upgrades=True) instead.")
+        return self.disable_vanilla(upgrades=True)
 
-    def disable_vanilla(self, primary_currency: str):
-        """Remove all built-in upgrades, achievements, and the flesh currency UI,
-        and set a new primary currency.
+    def disable_vanilla(self, primary_currency=None, *, upgrades=None, achievements=None,
+                        currencies=None, crates=None, rebirth=None, streak=None,
+                        equipment=None, cosmetics=None, clicker=None):
+        """Disable any combination of built-in systems until mods reload.
 
-        Call this before registering your own currency/upgrades/achievements.
-        The primary_currency you pass must be registered with register_currency()
-        either before or after this call — it just needs to exist by the time
-        the UI is built.
-
-        Example:
-            def register(game):
-                game.register_currency("souls", "Souls")
-                game.disable_vanilla("souls")
-                game.register_upgrade("soul_harvester", { ... })
+        Example: disable_vanilla(upgrades=True, crates=True, rebirth=True).
+        Omitted or False options leave that system unchanged. With no options,
+        disable upgrades, achievements and progression, keeping the shared
+        clicker. The legacy disable_vanilla("souls") form additionally hides
+        vanilla currencies and switches the primary currency to souls, which
+        may be registered before or after the call. Saved progress is retained.
         """
-        self.disable_vanilla_upgrades()
-        self.disable_vanilla_achievements()
-
-        # hide vanilla flesh while keeping the saved amount intact for later
-        self.currencies.pop("flesh", None)
-
-        # point the primary currency at the mod's replacement
-        self.primary_currency = primary_currency
-        self.invalidate_rate_cache()
+        options = dict(upgrades=upgrades, achievements=achievements, currencies=currencies,
+                       crates=crates, rebirth=rebirth, streak=streak, equipment=equipment,
+                       cosmetics=cosmetics, clicker=clicker)
+        for part, value in options.items():
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"{part} must be True or False")
+        if primary_currency is not None:
+            if not isinstance(primary_currency, str) or not primary_currency.strip():
+                raise ValueError("primary_currency must be a non-empty currency name")
+            primary_currency = primary_currency.strip()
+        if any(value is not None for value in options.values()):
+            selected = {part for part, value in options.items() if value}
+        else:
+            selected = set(VANILLA_PARTS) - {"currencies", "clicker"}
+            if primary_currency is not None:
+                selected.add("currencies")
+        owners = getattr(self, "_mod_currency_owners", {})
+        removed_currencies = {key for key in BASE_CURRENCIES if not owners.get(key)}
+        primary = self.primary_currency if primary_currency is None else primary_currency
+        if "currencies" in selected and primary in removed_currencies:
+            raise ValueError("Choose a replacement primary_currency before disabling vanilla currencies")
+        if "crates" in selected and hasattr(self, "_flush_pending_crate_drops"):
+            self._flush_pending_crate_drops()
+        self._disabled_vanilla = set(getattr(self, "_disabled_vanilla", ())) | selected
+        if "upgrades" in selected:
+            for key in BASE_UPGRADES:
+                if not getattr(self, "_mod_upgrade_owners", {}).get(key):
+                    self.upgrades.pop(key, None)
+        if "currencies" in selected:
+            for key in removed_currencies:
+                self.currencies.pop(key, None)
+        if primary_currency is not None:
+            self.primary_currency = primary_currency
+        if "streak" in selected and hasattr(self, "reset_streak"):
+            self.reset_streak()
+        self._mod_registry_changed()
+        return frozenset(self._disabled_vanilla)

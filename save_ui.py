@@ -368,7 +368,7 @@ class SaveUiMixin:
     def _add_save_file_filters(self, dialog):
         try:
             save_filter = Gtk.FileFilter()
-            save_filter.set_name("Fleshfetch saves")
+            save_filter.set_name("fleshfetch saves")
             save_filter.add_pattern("*.json")
             save_filter.add_pattern("*.fleshsave")
             dialog.add_filter(save_filter)

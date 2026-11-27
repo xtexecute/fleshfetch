@@ -1,6 +1,7 @@
 import random
 
 import runtime_scheduler as GLib
+from mod_api import vanilla_enabled
 
 
 class GameStateMixin:
@@ -61,6 +62,12 @@ class GameStateMixin:
         """Return currency_effects list; falls back to legacy fps/fpc keys."""
         u = self.upgrades[uid]
         if "currency_effects" in u:
+            from vanilla_shop import is_shop_equipment, production_multiplier
+            multiplier = production_multiplier(u, self.get_upgrade_count(uid)) if is_shop_equipment(self, uid) else 1
+            if multiplier != 1:
+                return [dict(effect, cpc=effect.get("cpc", 0.0) * multiplier,
+                             cps=effect.get("cps", 0.0) * multiplier)
+                        for effect in u["currency_effects"]]
             return u["currency_effects"]
         effects = []
         fpc = u.get("fpc", 0.0)
@@ -72,16 +79,33 @@ class GameStateMixin:
     def compute_cps(self, currency: str) -> float:
         """Total per-second gain for a currency from all owned upgrades."""
         self._ensure_rate_cache()
-        return float(self._cached_cps.get(currency, 0.0))
+        rate = float(self._cached_cps.get(currency, 0.0))
+        if currency == self.primary_currency and hasattr(self, "progression_bonus"):
+            rate *= self.progression_bonus("cps")
+        return rate
 
     def compute_cpc(self, currency: str) -> float:
         """Total per-click gain for a currency from all owned upgrades."""
         self._ensure_rate_cache()
         return float(self._cached_cpc.get(currency, 0.0))
 
+    def get_base_cpc(self, currency=None) -> float:
+        currency = self.primary_currency if currency is None else currency
+        for (_, registered_currency), amount in reversed(getattr(self, "_base_cpc_overrides", {}).items()):
+            if registered_currency == currency:
+                return amount
+        return float(self.state.get("flesh_per_click", 1.0)) if currency == self.primary_currency else 0.0
+
+    def compute_click_gain(self, currency) -> float:
+        rate = self.get_base_cpc(currency) + self.compute_cpc(currency)
+        if currency == self.primary_currency and hasattr(self, "progression_bonus"):
+            rate *= self.progression_bonus("click")
+            if hasattr(self, "streak_multiplier"):
+                rate *= self.streak_multiplier()
+        return rate
+
     def effective_fpc(self) -> float:
-        base = self.state.get("flesh_per_click", 1.0)
-        return base + self.compute_cpc(self.primary_currency)
+        return self.compute_click_gain(self.primary_currency)
 
     def on_filter_clicked(self, button, category_key):
         self.current_filter = category_key
@@ -261,6 +285,8 @@ class GameStateMixin:
 
     def _register_builtin_click_modifiers(self):
         def _critical_click_modifier(_context):
+            if "crit_click" not in self.upgrades or not vanilla_enabled(self, "upgrades"):
+                return None
             owned = self.get_upgrade_count("crit_click")
             if owned <= 0:
                 return None
@@ -270,13 +296,13 @@ class GameStateMixin:
             return {
                 "triggered": True,
                 "multiplier": 2.0,
-                "message": "Critical Clicks triggered",
+                "message": "Lucky Spring triggered",
             }
 
         self.register_click_modifier(
             "critical_clicks",
             _critical_click_modifier,
-            description="Critical Clicks: 5% chance per owned upgrade to double click gains.",
+            description="Lucky Spring: 5% chance per spring to double click gains.",
         )
 
     def _apply_click_modifier_result(self, gains: dict, modifier_info: dict, result, modifier_events: list):
